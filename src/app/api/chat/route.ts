@@ -3,12 +3,12 @@ import { askRAG } from '@/lib/rag'
 
 export async function POST(req: Request) {
   try {
-    const { question } = await req.json()
+    const { question, filters } = await req.json()
     if (!question) {
       return NextResponse.json({ error: 'Question is required' }, { status: 400 })
     }
 
-    const result = await askRAG(question)
+    const result = await askRAG(question, filters)
     return NextResponse.json(result)
   } catch (error: any) {
     console.error('Chat error:', error)

@@ -7,9 +7,16 @@ export const chatRouter = router({
     .input(
       z.object({
         question: z.string().min(1, 'Question cannot be empty'),
+        filters: z
+          .object({
+            branch: z.string().optional(),
+            semester: z.number().optional(),
+            subject: z.string().optional(),
+          })
+          .optional(),
       })
     )
     .mutation(async ({ input }) => {
-      return await askRAG(input.question)
+      return await askRAG(input.question, input.filters)
     }),
 })

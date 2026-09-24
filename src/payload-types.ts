@@ -234,6 +234,14 @@ export interface Document {
   chapter?: string | null;
   type: 'Notes' | 'PYQs' | 'Assignments';
   subject: number | Subject;
+  /**
+   * Cloudflare R2 object key path, e.g. documents/comps/sem3/math/module-1.pdf
+   */
+  storageKey?: string | null;
+  /**
+   * Cloudflare R2 bucket name
+   */
+  r2Bucket?: string | null;
   updatedAt: string;
   createdAt: string;
   url?: string | null;
@@ -271,6 +279,9 @@ export interface Chunk {
   subjectName?: string | null;
   semester?: number | null;
   branch?: string | null;
+  hasImage?: boolean | null;
+  imageUrl?: string | null;
+  imageCaption?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -467,6 +478,8 @@ export interface DocumentsSelect<T extends boolean = true> {
   chapter?: T;
   type?: T;
   subject?: T;
+  storageKey?: T;
+  r2Bucket?: T;
   updatedAt?: T;
   createdAt?: T;
   url?: T;
@@ -502,6 +515,9 @@ export interface ChunksSelect<T extends boolean = true> {
   subjectName?: T;
   semester?: T;
   branch?: T;
+  hasImage?: T;
+  imageUrl?: T;
+  imageCaption?: T;
   updatedAt?: T;
   createdAt?: T;
 }

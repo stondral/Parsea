@@ -41,5 +41,19 @@ export const Documents: CollectionConfig = {
       relationTo: 'subjects',
       required: true,
     },
+    {
+      name: 'storageKey',
+      type: 'text',
+      admin: {
+        description: 'Cloudflare R2 object key path, e.g. documents/comps/sem3/math/module-1.pdf',
+      },
+    },
+    {
+      name: 'r2Bucket',
+      type: 'text',
+      admin: {
+        description: 'Cloudflare R2 bucket name',
+      },
+    },
   ],
 }

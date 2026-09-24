@@ -18,6 +18,8 @@
     "test:int": "cross-env NODE_OPTIONS=--no-deprecation vitest run --config ./vitest.config.mts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1138.0",
+    "@aws-sdk/s3-request-presigner": "^3.1138.0",
     "@langchain/community": "^1.1.29",
     "@langchain/core": "^1.2.12",
     "@langchain/openai": "^1.5.13",

@@ -3,7 +3,7 @@
 > **CRITICAL DIRECTIVE FOR AI AGENTS & CONTRIBUTORS:**
 > Read this document completely before modifying or creating any code in this repository.
 > **DO NOT CREATE DUPLICATE FUNCTIONS FOR THE SAME JOB.**
-> All API procedures, caching, embedding, and RAG execution MUST follow the centralized single-source-of-truth modules documented below.
+> All API procedures, caching, embedding, R2 storage, and RAG execution MUST follow the centralized single-source-of-truth modules documented below.
 
 ---
 
@@ -13,9 +13,14 @@
 * **CMS & Academic Data Hierarchy**: Payload CMS 3.90 (`@payloadcms/next`, `@payloadcms/db-postgres`)
 * **API Layer**: **tRPC v11** (`@trpc/server`, `@trpc/client`, `@trpc/react-query`)
 * **State & Data Fetching**: **TanStack Query v5** (`@tanstack/react-query`)
-* **Database & Vector Engine**: Supabase PostgreSQL with `pgvector` (cosine distance `<=>`)
+* **Database & Vector Engine**: Supabase PostgreSQL with `pgvector`
+  * **Vector Index**: **HNSW** (`chunks_embedding_hnsw` using `vector_cosine_ops`)
+  * **Keyword Search**: PostgreSQL Full-Text Search with **GIN index** (`chunks_fts_idx`)
+* **Object Storage**: **Cloudflare R2** (S3-compatible via `@aws-sdk/client-s3` & `@aws-sdk/s3-request-presigner`)
+  * Direct student streaming via presigned URLs (Zero server bandwidth bottleneck on Next.js/Payload)
 * **Cache Layer**: **Redis** (`ioredis`) with automatic in-memory fallback (< 1ms hits)
 * **Embeddings**: Local transformer `Xenova/all-MiniLM-L6-v2` (**384 dimensions**, zero paid API cost, local Node.js execution via `@xenova/transformers`)
+* **Reranker**: Composite Cross-Reranker fusing Reciprocal Rank Fusion (RRF) with exact query term overlap and vector cosine similarity
 * **LLM Engine**: OpenRouter Free Tier (default model: `nex-agi/nex-n2.5-mini:free`, zero cost)
 * **Frontend Markdown & Math**: `react-markdown` + `remark-gfm` + `remark-math` + `rehype-katex` + `katex`
 
@@ -33,6 +38,10 @@
   ```ts
   import { getEmbedding } from '@/lib/embeddings'
   ```
+* **Object Storage (Cloudflare R2)**: There is only **ONE** module responsible for R2 upload & presigned URLs:
+  ```ts
+  import { uploadToR2, getPresignedDownloadUrl, R2_BUCKET } from '@/lib/r2'
+  ```
 * **Caching**: There is only **ONE** module responsible for caching:
   ```ts
   import { getCache, setCache, getOrSetCache, hashKey } from '@/lib/redis'
@@ -47,11 +56,11 @@
 * All computationally expensive operations (text embeddings, vector queries, LLM answers) MUST check the Redis cache layer before calling remote APIs or heavy pipelines.
 * Use `getOrSetCache(key, fetchFn, ttlSeconds)` for atomic cache-aside operations.
 * Embeddings cache key format: `emb:<sha256(text)[:16]>` (TTL: 7 days)
-* RAG answer cache key format: `rag:<sha256(question)[:16]>` (TTL: 24 hours)
+* RAG answer cache key format: `rag:v2:<sha256({question, filters})[:16]>` (TTL: 24 hours)
 
 ### Rule 4: Bulletproof 2-Gate Retrieval Policy
 Never return false citations to students:
-* **Gate 1 (Similarity Gate)**: Vector search queries MUST enforce a minimum cosine similarity threshold (`MIN_SIMILARITY_THRESHOLD = 0.40`). If all chunks score below 0.40, the system must immediately return without invoking the LLM.
+* **Gate 1 (Similarity Gate)**: Vector search queries MUST enforce a minimum cosine similarity threshold (`0.35`) and keyword presence. If all chunks score below threshold and have 0 keyword match, immediately return without invoking the LLM.
 * **Gate 2 (Negation Gate)**: If the LLM generates a response indicating information is absent (e.g., *"not mentioned"*, *"do not contain"*), the `sources` array MUST be emptied to `[]`. Never attach citations to negative answers.
 
 ### Rule 5: Public Read Access on Academic Collections
@@ -63,17 +72,37 @@ Never return false citations to students:
   ```
   Without this, Payload CMS restricts reads to authenticated admin sessions, causing public PDF downloads and native iframe viewers (`/api/documents/file/...`) to fail with `{"errors":[{"message":"You are not allowed to perform this action."}]}`.
 
+### Rule 6: Cloudflare R2 for Binary PDF Storage & Presigned Streaming
+* Binary PDF files are uploaded to **Cloudflare R2** with hierarchical keys:
+  `documents/{branch}/{semester}/{subject}/{filename}`
+* Payload CMS stores document metadata, `storageKey`, and `r2Bucket`.
+* PDF viewers and download links must stream directly from Cloudflare R2 using `getPresignedDownloadUrl(storageKey)`. Never route large PDF streams through Next.js/Payload server processes.
+
+### Rule 7: Metadata Pre-Filtering Before Retrieval
+* Academic college scale involves hundreds of thousands of chunks across multiple departments.
+* When `branch`, `semester`, or `subject` are provided, query filters MUST be applied in SQL before vector HNSW distance and GIN full-text calculations to isolate the search space.
+
+### Rule 8: Batch Embedding Generation in Ingestion
+* Never process embeddings sequentially 1-by-1 in loops (`PDF -> page 1 -> embedding -> page 2...`).
+* Always batch chunks (batches of 16/32) and resolve vectors concurrently (`Promise.all`) before bulk inserting.
+
+### Rule 9: Multimodal Diagram Extraction & Delivery
+* Chunks can have attached visual figures and diagrams (`has_image: true`, `image_url: text`, `image_caption: text`).
+* Extracted diagrams are stored in Cloudflare R2 under `documents/{branch}/{sem}/{subject}/media/page_{N}.png`.
+* `askRAG()` returns `images: CitedImage[]` with presigned direct Cloudflare R2 URLs.
+* The frontend chat UI displays visual diagram cards alongside text answers with full-resolution zoom modals.
+
 ---
 
 ## 3. Directory Structure & Import Reference
 
 ```text
-src/
+parsea/src/
 ├── app/
 │   ├── (frontend)/
 │   │   ├── layout.tsx         # Wraps app with <TRPCProvider>
 │   │   ├── chat/page.tsx      # Student chat UI using trpc.chat.ask.useMutation()
-│   │   └── pdf/[id]/page.tsx  # Native embedded PDF viewer jumping to #page=N
+│   │   └── pdf/[id]/page.tsx  # Native PDF viewer with direct Cloudflare R2 presigned streaming
 │   ├── (payload)/             # Payload CMS admin routes (/admin)
 │   └── api/
 │       ├── chat/route.ts      # REST wrapper -> calls askRAG()
@@ -84,23 +113,24 @@ src/
 │   ├── Branches.ts            # Branch level (relates to College)
 │   ├── Semesters.ts           # Semester level (relates to Branch)
 │   ├── Subjects.ts            # Subject level (relates to Semester)
-│   ├── Documents.ts           # Uploaded PDFs (relates to Subject, triggers hook)
+│   ├── Documents.ts           # Uploaded PDFs (relates to Subject, tracks storageKey & r2Bucket)
 │   ├── DocumentPages.ts       # Extracted page text (relates to Document)
-│   └── Chunks.ts              # Text chunks + pgvector vector(384) embeddings
+│   └── Chunks.ts              # Text chunks + pgvector vector(384) embeddings + academic tags
 │
 ├── hooks/
-│   └── processDocument.ts     # Document afterChange hook: extracts PDF, chunks & embeds
+│   └── processDocument.ts     # Document afterChange hook: R2 upload, batch embeddings, HNSW/GIN indexing
 │
 ├── lib/
+│   ├── r2.ts                  # Cloudflare R2 client (uploadToR2, getPresignedDownloadUrl)
 │   ├── redis.ts               # Central Redis cache layer (ioredis + memory fallback)
 │   ├── embeddings.ts          # Central local embeddings (all-MiniLM-L6-v2, 384-dim)
-│   └── rag.ts                 # CANONICAL SINGLE RAG ENGINE (askRAG)
+│   └── rag.ts                 # CANONICAL SINGLE RAG ENGINE (askRAG with pre-filtering & reranker)
 │
 ├── server/
 │   ├── trpc.ts                # tRPC initialization & procedures
 │   └── routers/
 │       ├── _app.ts            # Root AppRouter definition
-│       └── chat.ts            # Chat router: defines chat.ask procedure
+│       └── chat.ts            # Chat router: defines chat.ask procedure with metadata filters
 │
 └── trpc/
     ├── client.ts              # createTRPCReact<AppRouter>()
@@ -117,11 +147,18 @@ src/
 
 import { trpc } from '@/trpc/client'
 
-export function MyComponent() {
+export function ChatWidget() {
   const askMutation = trpc.chat.ask.useMutation()
 
   const handleSearch = (query: string) => {
-    askMutation.mutate({ question: query }, {
+    askMutation.mutate({
+      question: query,
+      filters: {
+        branch: 'COMPS',
+        semester: 3,
+        subject: 'Discrete Mathematics',
+      },
+    }, {
       onSuccess: (data) => {
         console.log('Answer:', data.answer)
         console.log('Sources:', data.sources)
@@ -133,7 +170,7 @@ export function MyComponent() {
 
   return (
     <div>
-      <button onClick={() => handleSearch('Explain pigeonhole principle')} disabled={askMutation.isPending}>
+      <button onClick={() => handleSearch('State pigeonhole principle')} disabled={askMutation.isPending}>
         {askMutation.isPending ? 'Searching...' : 'Search'}
       </button>
       {askMutation.data && <div>{askMutation.data.answer}</div>}
@@ -147,80 +184,70 @@ export function MyComponent() {
 // Always use the canonical askRAG function
 import { askRAG } from '@/lib/rag'
 
-const result = await askRAG('what is pigeonhole principle')
-// result = { answer: string, sources: Array<{ document: string, page: number }>, cached: boolean, latencyMs: number }
+const result = await askRAG('what is pigeonhole principle', {
+  branch: 'COMPS',
+  semester: 3,
+  subject: 'Discrete Mathematics',
+})
 ```
 
-### 3. Using the Redis Cache Directly
+### 3. Cloudflare R2 Direct PDF Presigned Streaming
 ```ts
-import { getCache, setCache, getOrSetCache, hashKey } from '@/lib/redis'
+import { getPresignedDownloadUrl } from '@/lib/r2'
 
-// Simple Get / Set
-await setCache('my-key', { data: 123 }, 3600) // 1 hr TTL
-const cached = await getCache<{ data: number }>('my-key')
-
-// Atomic Get-Or-Set
-const key = hashKey('prefix', userInput)
-const { data, cached } = await getOrSetCache(key, async () => {
-  return await expensiveComputation()
-}, 3600)
-```
-
-### 4. Generating Embeddings
-```ts
-import { getEmbedding } from '@/lib/embeddings'
-
-// Returns Promise<number[]> with exactly 384 dimensions
-// Automatically checks Redis before running transformer model
-const vector = await getEmbedding('text to embed')
+// Generates a 1-hour presigned URL directly from Cloudflare R2
+const presignedUrl = await getPresignedDownloadUrl(
+  'documents/comps/sem3/discrete-mathematics/module-5.pdf',
+  'stondemporium-media',
+  3600
+)
 ```
 
 ---
 
-## 5. Current End-to-End Workflow
+## 5. Optimized Hybrid Retrieval Architecture Diagram
 
-```
-1. Admin Upload (http://localhost:3000/admin)
-   College -> Branch -> Semester -> Subject -> Document (PDF Upload)
-         │
-         ▼
-2. Ingestion Pipeline (src/hooks/processDocument.ts)
-   - Sanitizes Array.prototype.random (prevents pdfjs-dist crash)
-   - Splits PDF by page into `document_pages`
-   - Chunks text into ~1000 character overlapping windows
-   - Generates 384-dim embeddings via getEmbedding() (Redis-cached)
-   - Saves to `chunks` table with `embedding vector(384)` in Supabase PostgreSQL
-         │
-         ▼
-3. Student Query (http://localhost:3000/chat)
-   - User types question into UI
-   - Triggers `trpc.chat.ask.useMutation()`
-         │
-         ▼
-4. Canonical RAG Engine (src/lib/rag.ts -> askRAG)
-   - Step A: Checks Redis cache (Returns in < 40ms on hit 🚀)
-   - Step B: Computes query vector via getEmbedding() (Redis-cached)
-   - Step C: Executes single SQL JOIN with Gate 1 similarity threshold (>= 0.40)
-   - Step D: Calls OpenRouter free LLM (nex-agi/nex-n2.5-mini:free)
-   - Step E: Runs Gate 2 negation filter (erases sources if model says info is missing)
-   - Step F: Caches final response in Redis for 24 hours
-         │
-         ▼
-5. Frontend Rendering
-   - Renders answer with react-markdown + KaTeX math notation
-   - Displays page-level citation badges (e.g. 📄 Pigeonhole Principle Page 37)
-   - Shows live latency counter (⚡ 0.04s on cache hit)
-```
-
----
-
-## 6. Environment Variables Reference (`.env`)
-
-```env
-DATABASE_URL=postgresql://postgres:...@...supabase.co:5432/postgres
-PAYLOAD_SECRET=...
-OPENROUTER_API_KEY=sk-or-v1-...
-OPENROUTER_MODEL=nex-agi/nex-n2.5-mini:free
-# Optional: Real Redis instance (defaults to sub-millisecond in-memory fallback if omitted)
-# REDIS_URL=redis://default:...@...upstash.io:6379
+```text
+                           Student Query
+                                 │
+                   ┌─────────────┴─────────────┐
+                   │ Metadata Pre-Filtering    │
+                   │ branch, semester, subject │
+                   └─────────────┬─────────────┘
+                                 │
+                 ┌───────────────┴───────────────┐
+                 ▼                               ▼
+      pgvector (HNSW Index)            PostgreSQL FTS (GIN)
+      Semantic Cosine (<=>)            Exact Keyword Match
+            Top 25                           Top 25
+                 │                               │
+                 └───────────────┬───────────────┘
+                                 ▼
+                     Reciprocal Rank Fusion (RRF)
+                          Merged Top 30-50
+                                 │
+                                 ▼
+                     Composite Cross-Reranker
+                     (RRF + Lexical Term Coverage + Vector Sim)
+                                 │
+                                 ▼
+                           Top 5 Chunks
+                                 │
+                                 ▼
+                             LLM Engine
+                      (OpenRouter / Free Tier)
+                                 │
+                                 ▼
+                         Answer + Citations
+                                 │
+                 ┌───────────────┴───────────────┐
+                 ▼                               ▼
+            Redis Cache                       Student
+         (rag:v2:<hash>)                         │
+                                                 ▼
+                                        Click 📄 [Open PDF ↗]
+                                                 │
+                                                 ▼
+                                           Cloudflare R2
+                                      (Direct Presigned Stream)
 ```

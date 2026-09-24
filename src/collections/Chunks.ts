@@ -38,5 +38,18 @@ export const Chunks: CollectionConfig = {
       name: 'branch',
       type: 'text',
     },
+    {
+      name: 'hasImage',
+      type: 'checkbox',
+      defaultValue: false,
+    },
+    {
+      name: 'imageUrl',
+      type: 'text',
+    },
+    {
+      name: 'imageCaption',
+      type: 'text',
+    },
   ],
 }

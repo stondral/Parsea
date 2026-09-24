@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { getPayload } from 'payload'
 import config from '@/payload.config'
 import { notFound } from 'next/navigation'
+import { getPresignedDownloadUrl } from '@/lib/r2'
 
 interface PDFPageProps {
   params: Promise<{ id: string }>
@@ -33,7 +34,19 @@ export default async function PDFViewerPage(props: PDFPageProps) {
     return notFound()
   }
 
-  const pdfUrl = `/api/documents/file/${encodeURIComponent(doc.filename)}#page=${pageNumber}`
+  // Generate direct presigned download URL from Cloudflare R2 (offloading Next.js/Payload server)
+  let directPdfUrl = `/api/documents/file/${encodeURIComponent(doc.filename)}`
+  let isR2 = false
+  if (doc.storageKey) {
+    try {
+      directPdfUrl = await getPresignedDownloadUrl(doc.storageKey, doc.r2Bucket || undefined)
+      isR2 = true
+    } catch (e) {
+      console.error('Failed generating R2 presigned URL, falling back to local:', e)
+    }
+  }
+
+  const pdfViewerUrl = `${directPdfUrl}#page=${pageNumber}`
   const subjectName = typeof doc.subject === 'object' ? doc.subject?.name : 'Academic Notes'
   const chapterName = doc.chapter || doc.name
 
@@ -83,6 +96,24 @@ export default async function PDFViewerPage(props: PDFPageProps) {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {isR2 && (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                padding: '4px 10px',
+                borderRadius: 6,
+                backgroundColor: 'rgba(249, 115, 22, 0.15)',
+                color: '#fb923c',
+                border: '1px solid rgba(249, 115, 22, 0.3)',
+                fontSize: '0.8rem',
+                fontWeight: 600,
+              }}
+            >
+              ☁️ Cloudflare R2 Direct
+            </span>
+          )}
           <span
             style={{
               padding: '4px 12px',
@@ -96,7 +127,9 @@ export default async function PDFViewerPage(props: PDFPageProps) {
             Jumped to Page {pageNumber}
           </span>
           <a
-            href={`/api/documents/file/${encodeURIComponent(doc.filename)}`}
+            href={directPdfUrl}
+            target="_blank"
+            rel="noopener noreferrer"
             download
             style={{
               display: 'inline-flex',
@@ -118,7 +151,7 @@ export default async function PDFViewerPage(props: PDFPageProps) {
       {/* Embedded Native Browser PDF Viewer */}
       <div style={{ flex: 1, position: 'relative', width: '100%', height: 'calc(100vh - 60px)' }}>
         <iframe
-          src={pdfUrl}
+          src={pdfViewerUrl}
           title={doc.name}
           style={{
             width: '100%',

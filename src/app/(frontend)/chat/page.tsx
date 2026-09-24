@@ -17,12 +17,28 @@ function normalizeMath(text: string): string {
 
 export default function ChatPage() {
   const [question, setQuestion] = useState('')
+  const [branch, setBranch] = useState('COMPS')
+  const [semester, setSemester] = useState<number | ''>(3)
+  const [subject, setSubject] = useState('Discrete Mathematics')
+  const [showFilters, setShowFilters] = useState(false)
+  const [selectedImage, setSelectedImage] = useState<string | null>(null)
+
   const askMutation = trpc.chat.ask.useMutation()
 
   const handleAsk = (e: React.FormEvent) => {
     e.preventDefault()
     if (!question.trim() || askMutation.isPending) return
-    askMutation.mutate({ question: question.trim() })
+
+    const filters = {
+      ...(branch.trim() ? { branch: branch.trim() } : {}),
+      ...(semester ? { semester: Number(semester) } : {}),
+      ...(subject.trim() ? { subject: subject.trim() } : {}),
+    }
+
+    askMutation.mutate({
+      question: question.trim(),
+      filters: Object.keys(filters).length > 0 ? filters : undefined,
+    })
   }
 
   const response = askMutation.data
@@ -30,52 +46,127 @@ export default function ChatPage() {
   const loading = askMutation.isPending
 
   return (
-    <div style={{ maxWidth: 860, margin: '0 auto', padding: '40px 20px', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
+    <div style={{ maxWidth: 880, margin: '0 auto', padding: '40px 20px', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
       <header style={{ marginBottom: 28 }}>
         <h1 style={{ fontSize: '2.2rem', fontWeight: 800, margin: 0, color: '#ffffff' }}>
           Parsea Academic Assistant
         </h1>
         <p style={{ margin: '8px 0 0', color: '#9ca3af', fontSize: '1rem' }}>
-          Powered by tRPC, TanStack Query, Redis Caching, and Supabase pgvector.
+          Multimodal Academic RAG • Cloudflare R2 • Supabase HNSW pgvector • Redis Caching
         </p>
       </header>
 
-      <form onSubmit={handleAsk} style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
-        <input
-          type="text"
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-          placeholder="Ask a question (e.g. 'teach me pigeonhole principle')..."
-          disabled={loading}
-          style={{
-            flex: 1,
-            padding: '12px 16px',
-            fontSize: '1rem',
-            borderRadius: 8,
-            border: '1px solid #d1d5db',
-            outline: 'none',
-            color: '#111827',
-            backgroundColor: '#ffffff',
-            boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
-          }}
-        />
-        <button
-          type="submit"
-          disabled={loading || !question.trim()}
-          style={{
-            padding: '12px 24px',
-            fontSize: '1rem',
-            fontWeight: 600,
-            borderRadius: 8,
-            border: 'none',
-            backgroundColor: loading ? '#9ca3af' : '#2563eb',
-            color: '#ffffff',
-            cursor: loading ? 'not-allowed' : 'pointer',
-            transition: 'background-color 0.15s ease',
-          }}
-        >
-          {loading ? 'Searching...' : 'Ask'}
-        </button>
+      <form onSubmit={handleAsk} style={{ marginBottom: 24 }}>
+        <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+          <input
+            type="text"
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            placeholder="Ask anything (e.g. 'explain pigeonhole principle with diagrams')..."
+            disabled={loading}
+            style={{
+              flex: 1,
+              padding: '12px 16px',
+              fontSize: '1rem',
+              borderRadius: 8,
+              border: '1px solid #d1d5db',
+              outline: 'none',
+              color: '#111827',
+              backgroundColor: '#ffffff',
+              boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
+            }}
+          />
+          <button
+            type="submit"
+            disabled={loading || !question.trim()}
+            style={{
+              padding: '12px 24px',
+              fontSize: '1rem',
+              fontWeight: 600,
+              borderRadius: 8,
+              border: 'none',
+              backgroundColor: loading ? '#9ca3af' : '#2563eb',
+              color: '#ffffff',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              transition: 'background-color 0.15s ease',
+            }}
+          >
+            {loading ? 'Searching...' : 'Ask'}
+          </button>
+        </div>
+
+        {/* Academic Filters Accordion Toggle */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button
+            type="button"
+            onClick={() => setShowFilters(!showFilters)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#93c5fd',
+              fontSize: '0.85rem',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: '4px 0',
+            }}
+          >
+            {showFilters ? '▼ Hide Metadata Pre-Filters' : '▶ Show Metadata Pre-Filters (Branch, Sem, Subject)'}
+          </button>
+        </div>
+
+        {showFilters && (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: 12,
+              marginTop: 12,
+              padding: '14px 16px',
+              backgroundColor: '#1e293b',
+              borderRadius: 8,
+              border: '1px solid #334155',
+            }}
+          >
+            <div>
+              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', marginBottom: 4 }}>
+                Branch / Dept
+              </label>
+              <input
+                type="text"
+                value={branch}
+                onChange={(e) => setBranch(e.target.value)}
+                placeholder="e.g. COMPS, IT"
+                style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid #475569', backgroundColor: '#0f172a', color: '#f8fafc', fontSize: '0.85rem', boxSizing: 'border-box' }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', marginBottom: 4 }}>
+                Semester
+              </label>
+              <input
+                type="number"
+                value={semester}
+                onChange={(e) => setSemester(e.target.value ? Number(e.target.value) : '')}
+                placeholder="e.g. 3"
+                style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid #475569', backgroundColor: '#0f172a', color: '#f8fafc', fontSize: '0.85rem', boxSizing: 'border-box' }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', marginBottom: 4 }}>
+                Subject
+              </label>
+              <input
+                type="text"
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                placeholder="e.g. Discrete Mathematics"
+                style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid #475569', backgroundColor: '#0f172a', color: '#f8fafc', fontSize: '0.85rem', boxSizing: 'border-box' }}
+              />
+            </div>
+          </div>
+        )}
       </form>
 
       {loading && (
@@ -145,16 +236,109 @@ export default function ChatPage() {
                 code: ({ node, ...props }) => (
                   <code style={{ backgroundColor: '#f3f4f6', padding: '2px 6px', borderRadius: 4, fontSize: '0.9em', fontFamily: 'monospace' }} {...props} />
                 ),
+                img: ({ node, ...props }) => (
+                  <img
+                    style={{
+                      maxWidth: '100%',
+                      borderRadius: 8,
+                      margin: '16px 0',
+                      border: '1px solid #e2e8f0',
+                      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)',
+                    }}
+                    {...props}
+                  />
+                ),
               }}
             >
               {normalizeMath(response.answer)}
             </ReactMarkdown>
           </div>
 
+          {/* ───────────────────────────────────────────────────────── */}
+          {/* MULTIMODAL DIAGRAMS & VISUAL AIDS (Cloudflare R2)        */}
+          {/* ───────────────────────────────────────────────────────── */}
+          {response.images && response.images.length > 0 && (
+            <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid #f3f4f6' }}>
+              <span style={{ fontSize: '0.95rem', fontWeight: 700, color: '#1e293b', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
+                🖼️ Extracted Diagrams & Visual Slides ({response.images.length})
+              </span>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14 }}>
+                {response.images.map((img: any, i: number) => (
+                  <div
+                    key={i}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      borderRadius: 8,
+                      overflow: 'hidden',
+                      backgroundColor: '#f8fafc',
+                      border: '1px solid #e2e8f0',
+                      boxShadow: '0 2px 4px rgba(0, 0, 0, 0.04)',
+                    }}
+                  >
+                    <div
+                      style={{ position: 'relative', cursor: 'pointer', backgroundColor: '#f1f5f9' }}
+                      onClick={() => setSelectedImage(img.url)}
+                    >
+                      <img
+                        src={img.url}
+                        alt={img.caption}
+                        style={{
+                          width: '100%',
+                          height: 160,
+                          objectFit: 'contain',
+                          display: 'block',
+                          backgroundColor: '#ffffff',
+                        }}
+                      />
+                      <span
+                        style={{
+                          position: 'absolute',
+                          top: 8,
+                          right: 8,
+                          backgroundColor: 'rgba(15, 23, 42, 0.75)',
+                          color: '#ffffff',
+                          padding: '2px 8px',
+                          borderRadius: 4,
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                        }}
+                      >
+                        Page {img.page}
+                      </span>
+                    </div>
+
+                    <div style={{ padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.8rem', color: '#475569', fontWeight: 500 }}>
+                        {img.caption}
+                      </span>
+                      <a
+                        href={`/pdf/2?page=${img.page}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          color: '#2563eb',
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                          textDecoration: 'none',
+                        }}
+                      >
+                        View in PDF ↗
+                      </a>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ───────────────────────────────────────────────────────── */}
+          {/* CITATIONS & SOURCES                                       */}
+          {/* ───────────────────────────────────────────────────────── */}
           {response.sources && response.sources.length > 0 && (
             <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid #f3f4f6' }}>
               <span style={{ fontSize: '0.95rem', fontWeight: 700, color: '#1e293b', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
-                📚 Sources
+                📚 Sources & Citations
               </span>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
                 {response.sources.map((s: any, i: number) => (
@@ -206,6 +390,45 @@ export default function ChatPage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Modal for Full-Resolution Image Viewing */}
+      {selectedImage && (
+        <div
+          onClick={() => setSelectedImage(null)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.85)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: 24,
+            cursor: 'zoom-out',
+          }}
+        >
+          <div style={{ maxWidth: '90vw', maxHeight: '90vh' }}>
+            <img
+              src={selectedImage}
+              alt="Expanded diagram"
+              style={{
+                width: '100%',
+                height: '100%',
+                maxHeight: '85vh',
+                objectFit: 'contain',
+                borderRadius: 8,
+                boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)',
+              }}
+            />
+            <p style={{ textAlign: 'center', color: '#94a3b8', fontSize: '0.85rem', marginTop: 8 }}>
+              Click anywhere to close
+            </p>
+          </div>
         </div>
       )}
     </div>
