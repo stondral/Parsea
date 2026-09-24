@@ -69,6 +69,13 @@ export interface Config {
   collections: {
     users: User;
     media: Media;
+    colleges: College;
+    branches: Branch;
+    semesters: Semester;
+    subjects: Subject;
+    documents: Document;
+    document_pages: DocumentPage;
+    chunks: Chunk;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
@@ -78,13 +85,20 @@ export interface Config {
   collectionsSelect: {
     users: UsersSelect<false> | UsersSelect<true>;
     media: MediaSelect<false> | MediaSelect<true>;
+    colleges: CollegesSelect<false> | CollegesSelect<true>;
+    branches: BranchesSelect<false> | BranchesSelect<true>;
+    semesters: SemestersSelect<false> | SemestersSelect<true>;
+    subjects: SubjectsSelect<false> | SubjectsSelect<true>;
+    documents: DocumentsSelect<false> | DocumentsSelect<true>;
+    document_pages: DocumentPagesSelect<false> | DocumentPagesSelect<true>;
+    chunks: ChunksSelect<false> | ChunksSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
     'payload-preferences': PayloadPreferencesSelect<false> | PayloadPreferencesSelect<true>;
     'payload-migrations': PayloadMigrationsSelect<false> | PayloadMigrationsSelect<true>;
   };
   db: {
-    defaultIDType: string;
+    defaultIDType: number;
   };
   fallbackLocale: null;
   globals: {};
@@ -122,7 +136,7 @@ export interface UserAuthOperations {
  * via the `definition` "users".
  */
 export interface User {
-  id: string;
+  id: number;
   updatedAt: string;
   createdAt: string;
   email: string;
@@ -130,6 +144,7 @@ export interface User {
   resetPasswordExpiration?: string | null;
   salt?: string | null;
   hash?: string | null;
+  resetPasswordRequestedAt?: string | null;
   loginAttempts?: number | null;
   lockUntil?: string | null;
   sessions?:
@@ -147,7 +162,7 @@ export interface User {
  * via the `definition` "media".
  */
 export interface Media {
-  id: string;
+  id: number;
   alt: string;
   updatedAt: string;
   createdAt: string;
@@ -163,10 +178,100 @@ export interface Media {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "colleges".
+ */
+export interface College {
+  id: number;
+  name: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "branches".
+ */
+export interface Branch {
+  id: number;
+  name: string;
+  college: number | College;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "semesters".
+ */
+export interface Semester {
+  id: number;
+  name: string;
+  number: number;
+  branch: number | Branch;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "subjects".
+ */
+export interface Subject {
+  id: number;
+  name: string;
+  code?: string | null;
+  semester: number | Semester;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "documents".
+ */
+export interface Document {
+  id: number;
+  name: string;
+  type: 'Notes' | 'PYQs' | 'Assignments';
+  subject: number | Subject;
+  updatedAt: string;
+  createdAt: string;
+  url?: string | null;
+  thumbnailURL?: string | null;
+  filename?: string | null;
+  mimeType?: string | null;
+  filesize?: number | null;
+  width?: number | null;
+  height?: number | null;
+  focalX?: number | null;
+  focalY?: number | null;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "document_pages".
+ */
+export interface DocumentPage {
+  id: number;
+  document: number | Document;
+  pageNumber: number;
+  text?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "chunks".
+ */
+export interface Chunk {
+  id: number;
+  document: number | Document;
+  pageNumber: number;
+  text: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
-  id: string;
+  id: number;
   key: string;
   data:
     | {
@@ -183,20 +288,48 @@ export interface PayloadKv {
  * via the `definition` "payload-locked-documents".
  */
 export interface PayloadLockedDocument {
-  id: string;
+  id: number;
   document?:
     | ({
         relationTo: 'users';
-        value: string | User;
+        value: number | User;
       } | null)
     | ({
         relationTo: 'media';
-        value: string | Media;
+        value: number | Media;
+      } | null)
+    | ({
+        relationTo: 'colleges';
+        value: number | College;
+      } | null)
+    | ({
+        relationTo: 'branches';
+        value: number | Branch;
+      } | null)
+    | ({
+        relationTo: 'semesters';
+        value: number | Semester;
+      } | null)
+    | ({
+        relationTo: 'subjects';
+        value: number | Subject;
+      } | null)
+    | ({
+        relationTo: 'documents';
+        value: number | Document;
+      } | null)
+    | ({
+        relationTo: 'document_pages';
+        value: number | DocumentPage;
+      } | null)
+    | ({
+        relationTo: 'chunks';
+        value: number | Chunk;
       } | null);
   globalSlug?: string | null;
   user: {
     relationTo: 'users';
-    value: string | User;
+    value: number | User;
   };
   updatedAt: string;
   createdAt: string;
@@ -206,10 +339,10 @@ export interface PayloadLockedDocument {
  * via the `definition` "payload-preferences".
  */
 export interface PayloadPreference {
-  id: string;
+  id: number;
   user: {
     relationTo: 'users';
-    value: string | User;
+    value: number | User;
   };
   key?: string | null;
   value?:
@@ -229,7 +362,7 @@ export interface PayloadPreference {
  * via the `definition` "payload-migrations".
  */
 export interface PayloadMigration {
-  id: string;
+  id: number;
   name?: string | null;
   batch?: number | null;
   updatedAt: string;
@@ -247,6 +380,7 @@ export interface UsersSelect<T extends boolean = true> {
   resetPasswordExpiration?: T;
   salt?: T;
   hash?: T;
+  resetPasswordRequestedAt?: T;
   loginAttempts?: T;
   lockUntil?: T;
   sessions?:
@@ -274,6 +408,89 @@ export interface MediaSelect<T extends boolean = true> {
   height?: T;
   focalX?: T;
   focalY?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "colleges_select".
+ */
+export interface CollegesSelect<T extends boolean = true> {
+  name?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "branches_select".
+ */
+export interface BranchesSelect<T extends boolean = true> {
+  name?: T;
+  college?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "semesters_select".
+ */
+export interface SemestersSelect<T extends boolean = true> {
+  name?: T;
+  number?: T;
+  branch?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "subjects_select".
+ */
+export interface SubjectsSelect<T extends boolean = true> {
+  name?: T;
+  code?: T;
+  semester?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "documents_select".
+ */
+export interface DocumentsSelect<T extends boolean = true> {
+  name?: T;
+  type?: T;
+  subject?: T;
+  updatedAt?: T;
+  createdAt?: T;
+  url?: T;
+  thumbnailURL?: T;
+  filename?: T;
+  mimeType?: T;
+  filesize?: T;
+  width?: T;
+  height?: T;
+  focalX?: T;
+  focalY?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "document_pages_select".
+ */
+export interface DocumentPagesSelect<T extends boolean = true> {
+  document?: T;
+  pageNumber?: T;
+  text?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "chunks_select".
+ */
+export interface ChunksSelect<T extends boolean = true> {
+  document?: T;
+  pageNumber?: T;
+  text?: T;
+  updatedAt?: T;
+  createdAt?: T;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema

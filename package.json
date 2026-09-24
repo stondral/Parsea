@@ -18,18 +18,27 @@
     "test:int": "cross-env NODE_OPTIONS=--no-deprecation vitest run --config ./vitest.config.mts"
   },
   "dependencies": {
+    "@langchain/community": "^1.1.29",
+    "@langchain/core": "^1.2.12",
+    "@langchain/openai": "^1.5.13",
+    "@langchain/textsplitters": "^1.0.1",
+    "@payloadcms/db-postgres": "3.90.2",
     "@payloadcms/next": "3.90.2",
     "@payloadcms/richtext-lexical": "3.90.2",
     "@payloadcms/ui": "3.90.2",
+    "@types/pg": "^8.23.1",
+    "@xenova/transformers": "^2.17.2",
     "cross-env": "^7.0.3",
     "dotenv": "16.4.7",
+    "drizzle-orm": "^0.45.3",
     "graphql": "^16.8.1",
     "next": "16.3.3",
     "payload": "3.90.2",
+    "pdf-parse": "^2.4.5",
+    "pg": "^8.23.0",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "sharp": "0.35.4",
-    "@payloadcms/db-postgres": "3.90.2"
+    "sharp": "0.35.4"
   },
   "devDependencies": {
     "@playwright/test": "1.58.2",
