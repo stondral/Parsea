@@ -3,6 +3,9 @@ import { processDocument } from '../hooks/processDocument'
 
 export const Documents: CollectionConfig = {
   slug: 'documents',
+  access: {
+    read: () => true,
+  },
   admin: {
     useAsTitle: 'name',
   },
@@ -18,6 +21,13 @@ export const Documents: CollectionConfig = {
       name: 'name',
       type: 'text',
       required: true,
+    },
+    {
+      name: 'chapter',
+      type: 'text',
+      admin: {
+        description: 'e.g. Unit 3, Linked Lists, Normalization',
+      },
     },
     {
       name: 'type',

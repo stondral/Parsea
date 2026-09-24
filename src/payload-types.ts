@@ -228,6 +228,10 @@ export interface Subject {
 export interface Document {
   id: number;
   name: string;
+  /**
+   * e.g. Unit 3, Linked Lists, Normalization
+   */
+  chapter?: string | null;
   type: 'Notes' | 'PYQs' | 'Assignments';
   subject: number | Subject;
   updatedAt: string;
@@ -263,6 +267,10 @@ export interface Chunk {
   document: number | Document;
   pageNumber: number;
   text: string;
+  chapter?: string | null;
+  subjectName?: string | null;
+  semester?: number | null;
+  branch?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -456,6 +464,7 @@ export interface SubjectsSelect<T extends boolean = true> {
  */
 export interface DocumentsSelect<T extends boolean = true> {
   name?: T;
+  chapter?: T;
   type?: T;
   subject?: T;
   updatedAt?: T;
@@ -489,6 +498,10 @@ export interface ChunksSelect<T extends boolean = true> {
   document?: T;
   pageNumber?: T;
   text?: T;
+  chapter?: T;
+  subjectName?: T;
+  semester?: T;
+  branch?: T;
   updatedAt?: T;
   createdAt?: T;
 }

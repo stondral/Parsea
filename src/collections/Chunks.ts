@@ -2,6 +2,9 @@ import type { CollectionConfig } from 'payload'
 
 export const Chunks: CollectionConfig = {
   slug: 'chunks',
+  access: {
+    read: () => true,
+  },
   fields: [
     {
       name: 'document',
@@ -19,6 +22,21 @@ export const Chunks: CollectionConfig = {
       type: 'textarea',
       required: true,
     },
-    // For now embedding is omitted, we will add it when we set up pgvector with Drizzle.
+    {
+      name: 'chapter',
+      type: 'text',
+    },
+    {
+      name: 'subjectName',
+      type: 'text',
+    },
+    {
+      name: 'semester',
+      type: 'number',
+    },
+    {
+      name: 'branch',
+      type: 'text',
+    },
   ],
 }

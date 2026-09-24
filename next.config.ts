@@ -7,6 +7,7 @@ const __filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(__filename)
 
 const nextConfig: NextConfig = {
+  serverExternalPackages: ['@xenova/transformers', 'onnxruntime-node', 'sharp'],
   images: {
     localPatterns: [
       {

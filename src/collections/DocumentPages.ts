@@ -2,6 +2,9 @@ import type { CollectionConfig } from 'payload'
 
 export const DocumentPages: CollectionConfig = {
   slug: 'document_pages',
+  access: {
+    read: () => true,
+  },
   fields: [
     {
       name: 'document',
