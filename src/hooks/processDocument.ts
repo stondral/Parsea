@@ -3,6 +3,7 @@ import { PDFLoader } from '@langchain/community/document_loaders/fs/pdf'
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters'
 import { getEmbedding } from '@/lib/embeddings'
 import { uploadToR2, R2_BUCKET } from '@/lib/r2'
+import { extractTextFromImage } from '@/lib/ocr'
 import { PDFParse } from 'pdf-parse'
 import path from 'path'
 import fs from 'fs'
@@ -98,18 +99,20 @@ export const processDocument: CollectionAfterChangeHook = async ({
         const pageImageMap = new Map<number, { r2Key: string; caption: string }>()
         try {
           req.payload.logger.info(`Extracting diagrams and slide visuals from ${doc.filename}...`)
-          const parser = new PDFParse(new Uint8Array(fileBuffer))
+          const parser: any = new PDFParse(new Uint8Array(fileBuffer))
           await parser.load()
 
           const imgRes = await parser.getImage()
-          const pagesWithMedia = new Set(
-            imgRes.pages.filter((p) => p.images && p.images.length > 0).map((p) => p.pageNumber)
+          const pagesWithMedia = new Set<number>(
+            imgRes.pages
+              .filter((p: any) => p.images && p.images.length > 0)
+              .map((p: any) => Number(p.pageNumber))
           )
 
           for (const pageNum of Array.from(pagesWithMedia)) {
             try {
-              const shotRes = await parser.getScreenshot({ pageNumber: pageNum })
-              const pData = shotRes.pages.find((p) => p.pageNumber === pageNum)
+              const shotRes = await parser.getScreenshot({ pageNumber: pageNum } as any)
+              const pData = shotRes.pages.find((p: any) => p.pageNumber === pageNum)
               if (pData && pData.data) {
                 const imgKey = `documents/${branchSlug}/${semSlug}/${subjectSlug}/media/page_${pageNum}.png`
                 await uploadToR2({
@@ -168,8 +171,32 @@ export const processDocument: CollectionAfterChangeHook = async ({
 
         for (const rDoc of rawDocs) {
           const pageNumber = rDoc.metadata.loc?.pageNumber || 1
-          const pageText = rDoc.pageContent
+          let pageText = rDoc.pageContent?.trim() || ''
           const imgInfo = pageImageMap.get(pageNumber)
+
+          // ─────────────────────────────────────────────────────────
+          // OCR FALLBACK: For scanned, CamScanner & handwritten pages (< 40 chars)
+          // ─────────────────────────────────────────────────────────
+          if (pageText.length < 40) {
+            req.payload.logger.info(`Page ${pageNumber} has low text density (${pageText.length} chars). Triggering OCR fallback...`)
+            try {
+              const ocrParser: any = new PDFParse(new Uint8Array(fileBuffer))
+              await ocrParser.load()
+              const shotRes = await ocrParser.getScreenshot({ pageNumber } as any)
+              const pData = shotRes.pages.find((p: any) => p.pageNumber === pageNumber)
+              await ocrParser.destroy()
+
+              if (pData && pData.data) {
+                const ocrText = await extractTextFromImage(pData.data)
+                if (ocrText && ocrText.length > 20) {
+                  req.payload.logger.info(`OCR successfully extracted ${ocrText.length} characters from Page ${pageNumber}.`)
+                  pageText = `[OCR Transcribed Page ${pageNumber}]:\n${ocrText}`
+                }
+              }
+            } catch (ocrErr: any) {
+              req.payload.logger.warn(`OCR fallback failed for page ${pageNumber}: ${ocrErr?.message}`)
+            }
+          }
 
           // Save raw document page
           await req.payload.create({

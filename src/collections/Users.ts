@@ -4,10 +4,26 @@ export const Users: CollectionConfig = {
   slug: 'users',
   admin: {
     useAsTitle: 'email',
+    defaultColumns: ['name', 'email', 'semester', 'phoneNumber', 'createdAt'],
   },
   auth: true,
   fields: [
-    // Email added by default
-    // Add more fields as needed
+    {
+      name: 'name',
+      type: 'text',
+    },
+    {
+      name: 'phoneNumber',
+      type: 'text',
+      admin: {
+        description: 'Optional phone number for account recovery and study groups.',
+      },
+    },
+    {
+      name: 'semester',
+      type: 'number',
+      min: 1,
+      max: 8,
+    },
   ],
 }

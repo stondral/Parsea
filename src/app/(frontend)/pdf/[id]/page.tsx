@@ -1,4 +1,3 @@
-import React from 'react'
 import Link from 'next/link'
 import { getPayload } from 'payload'
 import config from '@/payload.config'
@@ -10,6 +9,12 @@ interface PDFPageProps {
   searchParams: Promise<{ page?: string }>
 }
 
+interface ExtractedVisual {
+  url: string
+  page: number
+  caption: string
+}
+
 export default async function PDFViewerPage(props: PDFPageProps) {
   const params = await props.params
   const searchParams = await props.searchParams
@@ -18,9 +23,10 @@ export default async function PDFViewerPage(props: PDFPageProps) {
   const payloadConfig = await config
   const payload = await getPayload({ config: payloadConfig })
 
+  const docId = isNaN(Number(params.id)) ? params.id : Number(params.id)
   let doc: any = null
+
   try {
-    const docId = isNaN(Number(params.id)) ? params.id : Number(params.id)
     doc = await payload.findByID({
       collection: 'documents',
       id: docId,
@@ -30,136 +36,108 @@ export default async function PDFViewerPage(props: PDFPageProps) {
     return notFound()
   }
 
-  if (!doc || !doc.filename) {
-    return notFound()
-  }
+  if (!doc || !doc.filename) return notFound()
 
-  // Generate direct presigned download URL from Cloudflare R2 (offloading Next.js/Payload server)
   let directPdfUrl = `/api/documents/file/${encodeURIComponent(doc.filename)}`
   let isR2 = false
+
   if (doc.storageKey) {
     try {
       directPdfUrl = await getPresignedDownloadUrl(doc.storageKey, doc.r2Bucket || undefined)
       isR2 = true
-    } catch (e) {
-      console.error('Failed generating R2 presigned URL, falling back to local:', e)
+    } catch (error) {
+      console.error('Failed generating R2 presigned URL, falling back to local:', error)
     }
   }
+
+  const visualChunks = await payload.find({
+    collection: 'chunks',
+    depth: 0,
+    limit: 100,
+    sort: 'pageNumber',
+    where: {
+      and: [
+        { document: { equals: docId } },
+        { hasImage: { equals: true } },
+      ],
+    },
+  })
+
+  const visuals: ExtractedVisual[] = (
+    await Promise.all(
+      visualChunks.docs.map(async (chunk: any) => {
+        if (!chunk.imageUrl) return null
+
+        try {
+          return {
+            url: await getPresignedDownloadUrl(chunk.imageUrl, doc.r2Bucket || undefined),
+            page: chunk.pageNumber,
+            caption: chunk.imageCaption || `Extracted visual from page ${chunk.pageNumber}`,
+          }
+        } catch {
+          return null
+        }
+      }),
+    )
+  ).filter((visual): visual is ExtractedVisual => Boolean(visual))
+
+  const uniqueVisuals = visuals.filter(
+    (visual, index, all) => all.findIndex((item) => item.page === visual.page) === index,
+  )
 
   const pdfViewerUrl = `${directPdfUrl}#page=${pageNumber}`
   const subjectName = typeof doc.subject === 'object' ? doc.subject?.name : 'Academic Notes'
   const chapterName = doc.chapter || doc.name
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: '#0f172a', color: '#f8fafc', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
-      {/* Top Navigation & Metadata Toolbar */}
-      <header
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '12px 24px',
-          backgroundColor: '#1e293b',
-          borderBottom: '1px solid #334155',
-          height: 60,
-          boxSizing: 'border-box',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <Link
-            href="/chat"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              color: '#94a3b8',
-              textDecoration: 'none',
-              fontSize: '0.9rem',
-              fontWeight: 500,
-              padding: '6px 12px',
-              borderRadius: 6,
-              backgroundColor: '#0f172a',
-              border: '1px solid #334155',
-              transition: 'color 0.15s ease',
-            }}
-          >
-            ← Back to Chat
-          </Link>
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <span style={{ fontSize: '1rem', fontWeight: 600, color: '#f8fafc' }}>
-              📄 {doc.name}
-            </span>
-            <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
-              {subjectName} • {chapterName}
-            </span>
+    <div className="pdf-viewer-shell">
+      <header className="pdf-viewer-header">
+        <div className="pdf-viewer-heading">
+          <Link href="/notes" className="pdf-back-link">Back to library</Link>
+          <div>
+            <strong>{doc.name}</strong>
+            <span>{subjectName} - {chapterName}</span>
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {isR2 && (
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                padding: '4px 10px',
-                borderRadius: 6,
-                backgroundColor: 'rgba(249, 115, 22, 0.15)',
-                color: '#fb923c',
-                border: '1px solid rgba(249, 115, 22, 0.3)',
-                fontSize: '0.8rem',
-                fontWeight: 600,
-              }}
-            >
-              ☁️ Cloudflare R2 Direct
-            </span>
-          )}
-          <span
-            style={{
-              padding: '4px 12px',
-              borderRadius: 6,
-              backgroundColor: '#2563eb',
-              color: '#ffffff',
-              fontSize: '0.85rem',
-              fontWeight: 600,
-            }}
-          >
-            Jumped to Page {pageNumber}
-          </span>
-          <a
-            href={directPdfUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            download
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              padding: '6px 12px',
-              borderRadius: 6,
-              backgroundColor: '#334155',
-              color: '#cbd5e1',
-              fontSize: '0.85rem',
-              textDecoration: 'none',
-              fontWeight: 500,
-            }}
-          >
-            ⬇ Download PDF
+        <div className="pdf-viewer-actions">
+          {isR2 && <span className="pdf-storage-badge">R2 direct</span>}
+          <span className="pdf-page-badge">Page {pageNumber}</span>
+          <a href={directPdfUrl} target="_blank" rel="noopener noreferrer" download className="pdf-download-link">
+            Download PDF
           </a>
         </div>
       </header>
 
-      {/* Embedded Native Browser PDF Viewer */}
-      <div style={{ flex: 1, position: 'relative', width: '100%', height: 'calc(100vh - 60px)' }}>
-        <iframe
-          src={pdfViewerUrl}
-          title={doc.name}
-          style={{
-            width: '100%',
-            height: '100%',
-            border: 'none',
-            display: 'block',
-          }}
-        />
+      <div className={`pdf-viewer-workspace${uniqueVisuals.length ? ' has-visuals' : ''}`}>
+        <div className="pdf-frame-wrap">
+          <iframe src={pdfViewerUrl} title={doc.name} className="pdf-frame" />
+        </div>
+
+        {uniqueVisuals.length > 0 && (
+          <aside className="pdf-visuals-panel">
+            <div className="pdf-visuals-heading">
+              <span className="section-kicker">From this document</span>
+              <h2>Extracted visuals</h2>
+              <p>Diagrams and image-rich pages found during ingestion.</p>
+            </div>
+
+            <div className="pdf-visual-list">
+              {uniqueVisuals.map((visual) => (
+                <article key={visual.page} className="pdf-visual-card">
+                  <Link href={`/pdf/${params.id}?page=${visual.page}`} className="pdf-visual-image-link">
+                    <img src={visual.url} alt={visual.caption} />
+                    <span>Page {visual.page}</span>
+                  </Link>
+                  <div className="pdf-visual-copy">
+                    <p>{visual.caption}</p>
+                    <a href={visual.url} target="_blank" rel="noopener noreferrer">Open full size</a>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </aside>
+        )}
       </div>
     </div>
   )

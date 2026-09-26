@@ -3,5 +3,6 @@ allowBuilds:
   onnxruntime-node: set this to true or false
   protobufjs: set this to true or false
   sharp: true
+  tesseract.js: set this to true or false
   unrs-resolver: true
   workerd: true

@@ -137,6 +137,12 @@ export interface UserAuthOperations {
  */
 export interface User {
   id: number;
+  name?: string | null;
+  /**
+   * Optional phone number for account recovery and study groups.
+   */
+  phoneNumber?: string | null;
+  semester?: number | null;
   updatedAt: string;
   createdAt: string;
   email: string;
@@ -392,6 +398,9 @@ export interface PayloadMigration {
  * via the `definition` "users_select".
  */
 export interface UsersSelect<T extends boolean = true> {
+  name?: T;
+  phoneNumber?: T;
+  semester?: T;
   updatedAt?: T;
   createdAt?: T;
   email?: T;

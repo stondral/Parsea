@@ -1,0 +1,8 @@
+{
+  "onlyBuiltDependencies": [
+    "sharp",
+    "esbuild",
+    "unrs-resolver",
+    "tesseract.js"
+  ]
+}

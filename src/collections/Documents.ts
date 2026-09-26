@@ -5,6 +5,7 @@ export const Documents: CollectionConfig = {
   slug: 'documents',
   access: {
     read: () => true,
+    create: () => true,
   },
   admin: {
     useAsTitle: 'name',

@@ -1,433 +1,491 @@
 'use client'
 
-import React, { useState } from 'react'
-import { trpc } from '@/trpc/client'
+import React, { useState, useEffect, useRef } from 'react'
+import { LMSNavbar } from '@/components/LMSNavbar'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
 
-function normalizeMath(text: string): string {
-  if (!text) return ''
-  return text
-    .replace(/\\\[([\s\S]*?)\\\]/g, '$$$$$1$$$$')
-    .replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$')
+interface SourceCitation {
+  document: string
+  chapter?: string
+  page: number
+  url: string
 }
 
+interface CitedImage {
+  url: string
+  caption: string
+  page: number
+  document: string
+}
+
+interface ChatMessageItem {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  sources?: SourceCitation[]
+  images?: CitedImage[]
+  cached?: boolean
+  retrievalBypassed?: boolean
+  latencyMs?: number
+  timestamp: number
+}
+
+function normalizeMath(text: string): string {
+  if (!text) return ''
+  return (
+    text
+      // \[ ... \] → $$ ... $$ (display math)
+      .replace(/\\\[([^]*?)\\\]/g, (_, m) => `$$${m}$$`)
+      // \( ... \) → $ ... $ (inline math)
+      .replace(/\\\(([^]*?)\\\)/g, (_, m) => `$${m}$`)
+      // Unicode floor/ceiling brackets → LaTeX
+      .replace(/⌊([^⌋]+)⌋/g, (_, m) => `$\\lfloor ${m} \\rfloor$`)
+      .replace(/⌈([^⌉]+)⌉/g, (_, m) => `$\\lceil ${m} \\rceil$`)
+  )
+}
+
+
+const QUICK_FOLLOW_UPS = [
+  'Explain with a concrete example',
+  'Simplify this in easy terms',
+  'Give 3 exam practice questions',
+  'Summarise key takeaways in a table',
+]
+
+const STARTERS = [
+  'Explain pigeonhole principle with theorem statement',
+  'What is the difference between relation and function?',
+  'State Bayes theorem with applications',
+]
+
 export default function ChatPage() {
-  const [question, setQuestion] = useState('')
+  const [conversationId, setConversationId] = useState<string>('')
+  const [messages, setMessages] = useState<ChatMessageItem[]>([])
+  const [inputQuestion, setInputQuestion] = useState('')
   const [branch, setBranch] = useState('COMPS')
   const [semester, setSemester] = useState<number | ''>(3)
   const [subject, setSubject] = useState('Discrete Mathematics')
   const [showFilters, setShowFilters] = useState(false)
   const [selectedImage, setSelectedImage] = useState<string | null>(null)
 
-  const askMutation = trpc.chat.ask.useMutation()
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const [isStreaming, setIsStreaming] = useState(false)
+  const [streamStatus, setStreamStatus] = useState('Searching your notes...')
 
-  const handleAsk = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!question.trim() || askMutation.isPending) return
+  useEffect(() => {
+    const savedId = sessionStorage.getItem('parsea_conversation_id')
+    if (savedId) {
+      setConversationId(savedId)
+    } else {
+      const newId = crypto.randomUUID()
+      sessionStorage.setItem('parsea_conversation_id', newId)
+      setConversationId(newId)
+    }
+  }, [])
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages, isStreaming])
+
+  const handleStartNewChat = () => {
+    const newId = crypto.randomUUID()
+    sessionStorage.setItem('parsea_conversation_id', newId)
+    setConversationId(newId)
+    setMessages([])
+    setInputQuestion('')
+  }
+
+  const handleSendQuery = async (queryText: string) => {
+    const trimmed = queryText.trim()
+    if (!trimmed || isStreaming) return
+
+    const currentConvId = conversationId || crypto.randomUUID()
+    if (!conversationId) {
+      setConversationId(currentConvId)
+      sessionStorage.setItem('parsea_conversation_id', currentConvId)
+    }
+
+    const userMessage: ChatMessageItem = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: trimmed,
+      timestamp: Date.now(),
+    }
+    const assistantId = crypto.randomUUID()
+    const assistantMessage: ChatMessageItem = {
+      id: assistantId,
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+    }
+    const updatedMessages = [...messages, userMessage]
+    setMessages([...updatedMessages, assistantMessage])
+    setInputQuestion('')
+    setIsStreaming(true)
+    setStreamStatus('Searching your notes...')
 
     const filters = {
       ...(branch.trim() ? { branch: branch.trim() } : {}),
       ...(semester ? { semester: Number(semester) } : {}),
       ...(subject.trim() ? { subject: subject.trim() } : {}),
     }
+    const historyPayload = updatedMessages.slice(-10).map((m) => ({
+      role: m.role,
+      content: m.content,
+    }))
 
-    askMutation.mutate({
-      question: question.trim(),
-      filters: Object.keys(filters).length > 0 ? filters : undefined,
-    })
+    const updateAssistant = (patch: Partial<ChatMessageItem>) => {
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === assistantId ? { ...message, ...patch } : message
+        )
+      )
+    }
+
+    try {
+      const response = await fetch('/api/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: trimmed,
+          conversationId: currentConvId,
+          history: historyPayload,
+          filters: Object.keys(filters).length > 0 ? filters : undefined,
+        }),
+      })
+
+      if (!response.ok || !response.body) {
+        throw new Error((await response.text()) || 'Failed to start the response stream.')
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let streamedContent = ''
+
+      const processEvent = (rawEvent: string) => {
+        const dataLine = rawEvent.split('\n').find((line) => line.startsWith('data:'))
+        if (!dataLine) return
+        const event = JSON.parse(dataLine.slice(5).trim())
+
+        if (event.type === 'metadata') {
+          setStreamStatus('Writing your answer...')
+          updateAssistant({
+            sources: event.sources,
+            images: event.images,
+            cached: event.cached,
+            retrievalBypassed: event.retrievalBypassed,
+          })
+        } else if (event.type === 'token') {
+          streamedContent += event.token || ''
+          updateAssistant({ content: streamedContent })
+        } else if (event.type === 'done') {
+          updateAssistant({
+            content: event.answer || streamedContent,
+            sources: event.sources,
+            images: event.images,
+            cached: event.cached,
+            retrievalBypassed: event.retrievalBypassed,
+            latencyMs: event.latencyMs,
+          })
+        } else if (event.type === 'error') {
+          throw new Error(event.error || 'The AI response stream failed.')
+        }
+      }
+
+      while (true) {
+        const { value, done } = await reader.read()
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+        const events = buffer.split('\n\n')
+        buffer = events.pop() || ''
+        events.forEach(processEvent)
+        if (done) break
+      }
+      if (buffer.trim()) processEvent(buffer)
+    } catch (err: any) {
+      updateAssistant({
+        content: `**Error:** ${err?.message || 'Failed to generate response. Please try again.'}`,
+      })
+    } finally {
+      setIsStreaming(false)
+      setStreamStatus('Searching your notes...')
+    }
+  }
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    handleSendQuery(inputQuestion)
   }
 
-  const response = askMutation.data
-  const error = askMutation.error
-  const loading = askMutation.isPending
+  const isPending = isStreaming
+  const lastIsAssistant =
+    !isPending && messages.length > 0 && messages[messages.length - 1].role === 'assistant'
 
   return (
-    <div style={{ maxWidth: 880, margin: '0 auto', padding: '40px 20px', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
-      <header style={{ marginBottom: 28 }}>
-        <h1 style={{ fontSize: '2.2rem', fontWeight: 800, margin: 0, color: '#ffffff' }}>
-          Parsea Academic Assistant
-        </h1>
-        <p style={{ margin: '8px 0 0', color: '#9ca3af', fontSize: '1rem' }}>
-          Multimodal Academic RAG • Cloudflare R2 • Supabase HNSW pgvector • Redis Caching
-        </p>
-      </header>
+    <div className="chat-shell">
+      <LMSNavbar branch={branch} semester={semester || 3} />
 
-      <form onSubmit={handleAsk} style={{ marginBottom: 24 }}>
-        <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-          <input
-            type="text"
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            placeholder="Ask anything (e.g. 'explain pigeonhole principle with diagrams')..."
-            disabled={loading}
-            style={{
-              flex: 1,
-              padding: '12px 16px',
-              fontSize: '1rem',
-              borderRadius: 8,
-              border: '1px solid #d1d5db',
-              outline: 'none',
-              color: '#111827',
-              backgroundColor: '#ffffff',
-              boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
-            }}
-          />
-          <button
-            type="submit"
-            disabled={loading || !question.trim()}
-            style={{
-              padding: '12px 24px',
-              fontSize: '1rem',
-              fontWeight: 600,
-              borderRadius: 8,
-              border: 'none',
-              backgroundColor: loading ? '#9ca3af' : '#2563eb',
-              color: '#ffffff',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              transition: 'background-color 0.15s ease',
-            }}
-          >
-            {loading ? 'Searching...' : 'Ask'}
-          </button>
-        </div>
-
-        {/* Academic Filters Accordion Toggle */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      {/* Message feed */}
+      <div className="chat-body">
+        {/* ── Academic scope filters ─────────────────────────────── */}
+        <div>
           <button
             type="button"
+            className="chat-filters-toggle"
             onClick={() => setShowFilters(!showFilters)}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: '#93c5fd',
-              fontSize: '0.85rem',
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 4,
-              padding: '4px 0',
-            }}
           >
-            {showFilters ? '▼ Hide Metadata Pre-Filters' : '▶ Show Metadata Pre-Filters (Branch, Sem, Subject)'}
+            <span>{showFilters ? '▼' : '▶'}</span>
+            <span>
+              Scope: {branch} · Sem {semester || '?'} · {subject || 'All Subjects'}
+            </span>
           </button>
+
+          {showFilters && (
+            <div className="chat-filters-panel">
+              <div className="form-group">
+                <label className="chat-filters-label">Branch / Dept</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={branch}
+                  onChange={(e) => setBranch(e.target.value)}
+                  placeholder="e.g. COMPS, IT"
+                />
+              </div>
+              <div className="form-group">
+                <label className="chat-filters-label">Semester</label>
+                <input
+                  type="number"
+                  className="form-input"
+                  value={semester}
+                  onChange={(e) => setSemester(e.target.value ? Number(e.target.value) : '')}
+                  placeholder="e.g. 3"
+                />
+              </div>
+              <div className="form-group">
+                <label className="chat-filters-label">Subject</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={subject}
+                  onChange={(e) => setSubject(e.target.value)}
+                  placeholder="e.g. Discrete Mathematics"
+                />
+              </div>
+            </div>
+          )}
         </div>
 
-        {showFilters && (
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-              gap: 12,
-              marginTop: 12,
-              padding: '14px 16px',
-              backgroundColor: '#1e293b',
-              borderRadius: 8,
-              border: '1px solid #334155',
-            }}
-          >
-            <div>
-              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', marginBottom: 4 }}>
-                Branch / Dept
-              </label>
-              <input
-                type="text"
-                value={branch}
-                onChange={(e) => setBranch(e.target.value)}
-                placeholder="e.g. COMPS, IT"
-                style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid #475569', backgroundColor: '#0f172a', color: '#f8fafc', fontSize: '0.85rem', boxSizing: 'border-box' }}
-              />
-            </div>
-            <div>
-              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', marginBottom: 4 }}>
-                Semester
-              </label>
-              <input
-                type="number"
-                value={semester}
-                onChange={(e) => setSemester(e.target.value ? Number(e.target.value) : '')}
-                placeholder="e.g. 3"
-                style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid #475569', backgroundColor: '#0f172a', color: '#f8fafc', fontSize: '0.85rem', boxSizing: 'border-box' }}
-              />
-            </div>
-            <div>
-              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', marginBottom: 4 }}>
-                Subject
-              </label>
-              <input
-                type="text"
-                value={subject}
-                onChange={(e) => setSubject(e.target.value)}
-                placeholder="e.g. Discrete Mathematics"
-                style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid #475569', backgroundColor: '#0f172a', color: '#f8fafc', fontSize: '0.85rem', boxSizing: 'border-box' }}
-              />
+        {/* ── Starter / empty state ─────────────────────────────── */}
+        {messages.length === 0 && (
+          <div className="chat-starters">
+            <p className="chat-starters-title">Start an Academic Discussion</p>
+            <p className="chat-starters-desc">
+              Ask anything about your study materials. Follow-up questions reuse cached context —
+              no extra database queries.
+            </p>
+            <div className="chat-starters-chips">
+              {STARTERS.map((s, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  className="chat-starter-chip"
+                  onClick={() => handleSendQuery(s)}
+                >
+                  {s}
+                </button>
+              ))}
             </div>
           </div>
         )}
-      </form>
 
-      {loading && (
-        <div style={{ padding: 24, borderRadius: 12, backgroundColor: '#f9fafb', border: '1px solid #e5e7eb', textAlign: 'center', color: '#6b7280' }}>
-          <div style={{ display: 'inline-block', width: 24, height: 24, border: '3px solid #e5e7eb', borderTopColor: '#2563eb', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
-          <p style={{ margin: '8px 0 0', fontSize: '0.9rem' }}>Searching vector index & generating response via tRPC...</p>
-          <style>{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
-        </div>
-      )}
-
-      {error && !loading && (
-        <div style={{ color: '#b91c1c', backgroundColor: '#fef2f2', padding: 16, borderRadius: 8, border: '1px solid #fecaca' }}>
-          <strong>Error:</strong> {error.message}
-        </div>
-      )}
-
-      {response && !loading && (
-        <div
-          style={{
-            padding: '24px 28px',
-            borderRadius: 12,
-            backgroundColor: '#ffffff',
-            border: '1px solid #e5e7eb',
-            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)',
-            color: '#1f2937',
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, borderBottom: '1px solid #f3f4f6', paddingBottom: 12 }}>
-            <span style={{ fontSize: '0.85rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6b7280' }}>
-              Answer
-            </span>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              {response.cached && (
-                <span style={{ fontSize: '0.75rem', fontWeight: 600, backgroundColor: '#dcfce7', color: '#15803d', padding: '2px 8px', borderRadius: 999 }}>
-                  🚀 Redis Cache
-                </span>
-              )}
-              {response.latencyMs !== undefined && (
-                <span style={{ fontSize: '0.8rem', color: '#9ca3af' }}>
-                  ⚡ {(response.latencyMs / 1000).toFixed(2)}s
-                </span>
-              )}
-            </div>
-          </div>
-
+        {/* ── Message thread ───────────────────────────────────── */}
+        {messages.map((msg) => (
           <div
-            style={{
-              lineHeight: 1.7,
-              fontSize: '1rem',
-              overflowWrap: 'break-word',
-            }}
+            key={msg.id}
+            className={`chat-message-row chat-message-row--${msg.role}`}
           >
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm, remarkMath]}
-              rehypePlugins={[rehypeKatex]}
-              components={{
-                h1: ({ node, ...props }) => <h1 style={{ fontSize: '1.5rem', fontWeight: 700, margin: '20px 0 10px', color: '#111827' }} {...props} />,
-                h2: ({ node, ...props }) => <h2 style={{ fontSize: '1.25rem', fontWeight: 600, margin: '18px 0 8px', color: '#1f2937' }} {...props} />,
-                h3: ({ node, ...props }) => <h3 style={{ fontSize: '1.1rem', fontWeight: 600, margin: '14px 0 6px', color: '#374151' }} {...props} />,
-                p: ({ node, ...props }) => <p style={{ margin: '10px 0' }} {...props} />,
-                ul: ({ node, ...props }) => <ul style={{ paddingLeft: 24, margin: '10px 0' }} {...props} />,
-                ol: ({ node, ...props }) => <ol style={{ paddingLeft: 24, margin: '10px 0' }} {...props} />,
-                li: ({ node, ...props }) => <li style={{ margin: '4px 0' }} {...props} />,
-                blockquote: ({ node, ...props }) => (
-                  <blockquote style={{ borderLeft: '4px solid #3b82f6', margin: '12px 0', padding: '8px 16px', backgroundColor: '#f0f9ff', color: '#1e40af' }} {...props} />
-                ),
-                code: ({ node, ...props }) => (
-                  <code style={{ backgroundColor: '#f3f4f6', padding: '2px 6px', borderRadius: 4, fontSize: '0.9em', fontFamily: 'monospace' }} {...props} />
-                ),
-                img: ({ node, ...props }) => (
-                  <img
-                    style={{
-                      maxWidth: '100%',
-                      borderRadius: 8,
-                      margin: '16px 0',
-                      border: '1px solid #e2e8f0',
-                      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)',
-                    }}
-                    {...props}
-                  />
-                ),
-              }}
-            >
-              {normalizeMath(response.answer)}
-            </ReactMarkdown>
-          </div>
+            <span className="chat-sender-label">
+              {msg.role === 'user' ? 'You' : 'Parsea'}
+            </span>
 
-          {/* ───────────────────────────────────────────────────────── */}
-          {/* MULTIMODAL DIAGRAMS & VISUAL AIDS (Cloudflare R2)        */}
-          {/* ───────────────────────────────────────────────────────── */}
-          {response.images && response.images.length > 0 && (
-            <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid #f3f4f6' }}>
-              <span style={{ fontSize: '0.95rem', fontWeight: 700, color: '#1e293b', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
-                🖼️ Extracted Diagrams & Visual Slides ({response.images.length})
-              </span>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14 }}>
-                {response.images.map((img: any, i: number) => (
-                  <div
-                    key={i}
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      borderRadius: 8,
-                      overflow: 'hidden',
-                      backgroundColor: '#f8fafc',
-                      border: '1px solid #e2e8f0',
-                      boxShadow: '0 2px 4px rgba(0, 0, 0, 0.04)',
-                    }}
-                  >
-                    <div
-                      style={{ position: 'relative', cursor: 'pointer', backgroundColor: '#f1f5f9' }}
-                      onClick={() => setSelectedImage(img.url)}
-                    >
-                      <img
-                        src={img.url}
-                        alt={img.caption}
-                        style={{
-                          width: '100%',
-                          height: 160,
-                          objectFit: 'contain',
-                          display: 'block',
-                          backgroundColor: '#ffffff',
-                        }}
-                      />
+            {msg.role === 'user' ? (
+              <div className="chat-bubble-user">{msg.content}</div>
+            ) : (
+              <div className="chat-card">
+                {/* Status badges */}
+                <div className="chat-card-header">
+                  <span className="chat-card-label">Response</span>
+                  <div className="chat-card-badges">
+                    {msg.retrievalBypassed && (
                       <span
-                        style={{
-                          position: 'absolute',
-                          top: 8,
-                          right: 8,
-                          backgroundColor: 'rgba(15, 23, 42, 0.75)',
-                          color: '#ffffff',
-                          padding: '2px 8px',
-                          borderRadius: 4,
-                          fontSize: '0.75rem',
-                          fontWeight: 600,
-                        }}
+                        className="badge badge-blue badge-rounded"
+                        title="Follow-up answered using cached context — 0 DB queries"
                       >
-                        Page {img.page}
+                        Instant
                       </span>
-                    </div>
-
-                    <div style={{ padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '0.8rem', color: '#475569', fontWeight: 500 }}>
-                        {img.caption}
+                    )}
+                    {msg.cached && (
+                      <span className="badge badge-green badge-rounded">Cached</span>
+                    )}
+                    {msg.latencyMs !== undefined && (
+                      <span className="text-muted text-xs">
+                        {(msg.latencyMs / 1000).toFixed(2)}s
                       </span>
-                      <a
-                        href={`/pdf/2?page=${img.page}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                          color: '#2563eb',
-                          fontSize: '0.75rem',
-                          fontWeight: 600,
-                          textDecoration: 'none',
-                        }}
-                      >
-                        View in PDF ↗
-                      </a>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ───────────────────────────────────────────────────────── */}
-          {/* CITATIONS & SOURCES                                       */}
-          {/* ───────────────────────────────────────────────────────── */}
-          {response.sources && response.sources.length > 0 && (
-            <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid #f3f4f6' }}>
-              <span style={{ fontSize: '0.95rem', fontWeight: 700, color: '#1e293b', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
-                📚 Sources & Citations
-              </span>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
-                {response.sources.map((s: any, i: number) => (
-                  <div
-                    key={i}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '12px 14px',
-                      borderRadius: 8,
-                      backgroundColor: '#f8fafc',
-                      border: '1px solid #e2e8f0',
-                      boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
-                    }}
-                  >
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                      <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#1e293b' }}>
-                        📄 {s.document}
-                      </span>
-                      <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
-                        {s.chapter ? `${s.chapter} • ` : ''}<strong style={{ color: '#2563eb' }}>Page {s.page}</strong>
-                      </span>
-                    </div>
-                    {s.url && (
-                      <a
-                        href={s.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          padding: '6px 12px',
-                          fontSize: '0.8rem',
-                          fontWeight: 600,
-                          borderRadius: 6,
-                          backgroundColor: '#2563eb',
-                          color: '#ffffff',
-                          textDecoration: 'none',
-                          transition: 'background-color 0.15s ease',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        Open PDF ↗
-                      </a>
                     )}
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+                </div>
 
-      {/* Modal for Full-Resolution Image Viewing */}
+                {/* Markdown + KaTeX */}
+                <div className="markdown-body">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm, remarkMath]}
+                    rehypePlugins={[rehypeKatex]}
+                  >
+                    {normalizeMath(msg.content)}
+                  </ReactMarkdown>
+                </div>
+
+                {/* Diagrams */}
+                {msg.images && msg.images.length > 0 && (
+                  <div className="chat-section">
+                    <span className="chat-section-title">
+                      Extracted diagrams ({msg.images.length})
+                    </span>
+                    <div className="chat-img-grid">
+                      {msg.images.map((img, i) => (
+                        <div key={i} className="chat-img-card">
+                          <div
+                            className="chat-img-preview"
+                            onClick={() => setSelectedImage(img.url)}
+                          >
+                            <img src={img.url} alt={img.caption} />
+                            <span className="chat-img-page-badge">Pg {img.page}</span>
+                          </div>
+                          <div className="chat-img-caption">{img.caption}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Sources */}
+                {msg.sources && msg.sources.length > 0 && (
+                  <div className="chat-section">
+                    <span className="chat-section-title">Citations</span>
+                    <div className="chat-sources-grid">
+                      {msg.sources.map((s, i) => (
+                        <div key={i} className="chat-source-item">
+                          <div className="chat-source-info">
+                            <span className="chat-source-name">{s.document}</span>
+                            <span className="chat-source-detail">
+                              {s.chapter ? `${s.chapter} · ` : ''}
+                              <span className="chat-source-page">Page {s.page}</span>
+                            </span>
+                          </div>
+                          {s.url && (
+                            <a
+                              href={s.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="btn btn-primary btn-sm"
+                              style={{ flexShrink: 0 }}
+                            >
+                              PDF ↗
+                            </a>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+
+        {/* Loading indicator */}
+        {isPending && (
+          <div className="chat-loading-bubble">
+            <div className="spinner" />
+            <span>{streamStatus}</span>
+          </div>
+        )}
+
+        {/* Quick follow-up chips */}
+        {lastIsAssistant && (
+          <div className="chat-followups">
+            <span className="chat-followup-label">Follow-up:</span>
+            {QUICK_FOLLOW_UPS.map((chip, i) => (
+              <button
+                key={i}
+                type="button"
+                className="chat-followup-chip"
+                onClick={() => handleSendQuery(chip)}
+              >
+                {chip}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* ── Sticky input bar ─────────────────────────────────────── */}
+      <div className="chat-input-bar">
+        <form onSubmit={handleSubmit} className="chat-input-inner">
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={handleStartNewChat}
+            title="Start a new conversation thread"
+            style={{ flexShrink: 0 }}
+          >
+            New chat
+          </button>
+
+          <input
+            type="text"
+            className="form-input"
+            value={inputQuestion}
+            onChange={(e) => setInputQuestion(e.target.value)}
+            placeholder={
+              messages.length === 0
+                ? "Ask anything — e.g. 'explain pigeonhole principle with diagrams'…"
+                : "Ask a follow-up — reuses cached context, no extra DB query…"
+            }
+            disabled={isPending}
+            style={{ flex: 1 }}
+          />
+
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={isPending || !inputQuestion.trim()}
+            style={{ flexShrink: 0 }}
+          >
+            {isPending ? (
+              <>
+                <span className="btn-spinner" />
+                Sending…
+              </>
+            ) : (
+              'Send →'
+            )}
+          </button>
+        </form>
+      </div>
+
+      {/* Diagram zoom overlay */}
       {selectedImage && (
-        <div
-          onClick={() => setSelectedImage(null)}
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.85)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: 24,
-            cursor: 'zoom-out',
-          }}
-        >
-          <div style={{ maxWidth: '90vw', maxHeight: '90vh' }}>
-            <img
-              src={selectedImage}
-              alt="Expanded diagram"
-              style={{
-                width: '100%',
-                height: '100%',
-                maxHeight: '85vh',
-                objectFit: 'contain',
-                borderRadius: 8,
-                boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)',
-              }}
-            />
-            <p style={{ textAlign: 'center', color: '#94a3b8', fontSize: '0.85rem', marginTop: 8 }}>
-              Click anywhere to close
-            </p>
+        <div className="zoom-overlay" onClick={() => setSelectedImage(null)}>
+          <div>
+            <img src={selectedImage} alt="Expanded diagram" className="zoom-img" />
+            <p className="zoom-hint">Click anywhere to close</p>
           </div>
         </div>
       )}
