@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, Suspense } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { trpc } from '@/trpc/client'
@@ -9,7 +9,7 @@ import { UploadNoteModal } from '@/components/UploadNoteModal'
 
 const MATERIAL_TYPES = ['All', 'Notes', 'PYQs', 'Assignments']
 
-export default function NotesPage() {
+function NotesContent() {
   const searchParams = useSearchParams()
   const [selectedSubject, setSelectedSubject] = useState(() => searchParams.get('subject') ?? '')
   const [selectedType, setSelectedType] = useState('All')
@@ -217,5 +217,13 @@ export default function NotesPage() {
 
       <UploadNoteModal isOpen={isUploadOpen} onClose={() => setIsUploadOpen(false)} />
     </div>
+  )
+}
+
+export default function NotesPage() {
+  return (
+    <Suspense fallback={<div className="lms-shell" />}>
+      <NotesContent />
+    </Suspense>
   )
 }

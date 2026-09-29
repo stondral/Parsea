@@ -29,8 +29,12 @@ export async function POST(req: Request) {
     const payload = await getPayload({ config: payloadConfig })
 
     // Resolve or bootstrap subject if necessary
-    let resolvedSubjectId: number | string = subjectId
-    if (!resolvedSubjectId || resolvedSubjectId === 'undefined') {
+    let resolvedSubjectId: number
+    const parsedSubjectId = Number(subjectId)
+
+    if (subjectId && !isNaN(parsedSubjectId) && parsedSubjectId > 0) {
+      resolvedSubjectId = parsedSubjectId
+    } else {
       const existingSubjects = await payload.find({ collection: 'subjects', limit: 1 })
       if (existingSubjects.docs.length > 0) {
         resolvedSubjectId = existingSubjects.docs[0].id
@@ -89,7 +93,7 @@ export async function POST(req: Request) {
         name: name.trim(),
         chapter: chapter.trim() || name.trim(),
         type: (type as any) || 'Notes',
-        subject: isNaN(Number(resolvedSubjectId)) ? resolvedSubjectId : Number(resolvedSubjectId),
+        subject: resolvedSubjectId,
       },
       file: {
         data: fileBuffer,
