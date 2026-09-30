@@ -4,10 +4,59 @@ import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters'
 import { getEmbedding } from '@/lib/embeddings'
 import { uploadToR2, R2_BUCKET } from '@/lib/r2'
 import { extractTextFromImage } from '@/lib/ocr'
-import { PDFParse } from 'pdf-parse'
 import path from 'path'
 import fs from 'fs'
 import { sql } from 'drizzle-orm'
+
+// Polyfill browser globals needed by pdfjs-dist / pdf-parse if not already present in Node runtime
+if (typeof (globalThis as any).DOMMatrix === 'undefined') {
+  try {
+    const { DOMMatrix } = require('@napi-rs/canvas')
+    if (DOMMatrix) (globalThis as any).DOMMatrix = DOMMatrix
+  } catch {
+    class DOMMatrixFallback {
+      a = 1; b = 0; c = 0; d = 1; e = 0; f = 0
+      m11 = 1; m12 = 0; m13 = 0; m14 = 0
+      m21 = 0; m22 = 1; m23 = 0; m24 = 0
+      m31 = 0; m32 = 0; m33 = 1; m34 = 0
+      m41 = 0; m42 = 0; m43 = 0; m44 = 1
+      is2D = true
+      isIdentity = true
+      translate() { return this }
+      scale() { return this }
+      multiply() { return this }
+      preMultiplySelf() { return this }
+      invertSelf() { return this }
+      setTransform() { return this }
+    }
+    ;(globalThis as any).DOMMatrix = DOMMatrixFallback
+  }
+}
+if (typeof (globalThis as any).Path2D === 'undefined') {
+  try {
+    const { Path2D } = require('@napi-rs/canvas')
+    if (Path2D) (globalThis as any).Path2D = Path2D
+  } catch {
+    class Path2DFallback {
+      addPath() {}
+      closePath() {}
+    }
+    ;(globalThis as any).Path2D = Path2DFallback
+  }
+}
+if (typeof (globalThis as any).ImageData === 'undefined') {
+  try {
+    const { ImageData } = require('@napi-rs/canvas')
+    if (ImageData) (globalThis as any).ImageData = ImageData
+  } catch {
+    class ImageDataFallback {
+      data = new Uint8ClampedArray(0)
+      width = 0
+      height = 0
+    }
+    ;(globalThis as any).ImageData = ImageDataFallback
+  }
+}
 
 function slugify(text: string): string {
   return text
@@ -97,42 +146,60 @@ export const processDocument: CollectionAfterChangeHook = async ({
         // 2. EXTRACT DIAGRAMS & MEDIA PER PAGE -> CLOUDFLARE R2
         // ─────────────────────────────────────────────────────────
         const pageImageMap = new Map<number, { r2Key: string; caption: string }>()
+        let PDFParseClass: any = null
+        let CanvasFactoryClass: any = null
+
         try {
-          req.payload.logger.info(`Extracting diagrams and slide visuals from ${doc.filename}...`)
-          const parser: any = new PDFParse(new Uint8Array(fileBuffer))
-          await parser.load()
+          // Lazy-load worker and pdf-parse dynamically to prevent top-level module evaluation issues
+          const workerMod = await import('pdf-parse/worker')
+          CanvasFactoryClass = workerMod.CanvasFactory
+          const pdfParseMod = await import('pdf-parse')
+          PDFParseClass = pdfParseMod.PDFParse
+        } catch (loadErr: any) {
+          req.payload.logger.warn(`pdf-parse module could not be initialized: ${loadErr?.message}`)
+        }
 
-          const imgRes = await parser.getImage()
-          const pagesWithMedia = new Set<number>(
-            imgRes.pages
-              .filter((p: any) => p.images && p.images.length > 0)
-              .map((p: any) => Number(p.pageNumber))
-          )
+        if (PDFParseClass) {
+          try {
+            req.payload.logger.info(`Extracting diagrams and slide visuals from ${doc.filename}...`)
+            const parser: any = new PDFParseClass({
+              data: new Uint8Array(fileBuffer),
+              ...(CanvasFactoryClass ? { CanvasFactory: CanvasFactoryClass } : {}),
+            })
+            await parser.load()
 
-          for (const pageNum of Array.from(pagesWithMedia)) {
-            try {
-              const shotRes = await parser.getScreenshot({ pageNumber: pageNum } as any)
-              const pData = shotRes.pages.find((p: any) => p.pageNumber === pageNum)
-              if (pData && pData.data) {
-                const imgKey = `documents/${branchSlug}/${semSlug}/${subjectSlug}/media/page_${pageNum}.png`
-                await uploadToR2({
-                  buffer: Buffer.from(pData.data),
-                  key: imgKey,
-                  contentType: 'image/png',
-                })
-                pageImageMap.set(pageNum, {
-                  r2Key: imgKey,
-                  caption: `Diagram & Visual Slide (Page ${pageNum})`,
-                })
+            const imgRes = await parser.getImage()
+            const pagesWithMedia = new Set<number>(
+              imgRes.pages
+                .filter((p: any) => p.images && p.images.length > 0)
+                .map((p: any) => Number(p.pageNumber))
+            )
+
+            for (const pageNum of Array.from(pagesWithMedia)) {
+              try {
+                const shotRes = await parser.getScreenshot({ pageNumber: pageNum } as any)
+                const pData = shotRes.pages.find((p: any) => p.pageNumber === pageNum)
+                if (pData && pData.data) {
+                  const imgKey = `documents/${branchSlug}/${semSlug}/${subjectSlug}/media/page_${pageNum}.png`
+                  await uploadToR2({
+                    buffer: Buffer.from(pData.data),
+                    key: imgKey,
+                    contentType: 'image/png',
+                  })
+                  pageImageMap.set(pageNum, {
+                    r2Key: imgKey,
+                    caption: `Diagram & Visual Slide (Page ${pageNum})`,
+                  })
+                }
+              } catch (err) {
+                // Non-critical if individual page screenshot fails
               }
-            } catch (err) {
-              // Non-critical if individual page screenshot fails
             }
+            await parser.destroy()
+            req.payload.logger.info(`Extracted & uploaded ${pageImageMap.size} page diagrams to R2.`)
+          } catch (mediaErr: any) {
+            req.payload.logger.warn(`Diagram extraction warning: ${mediaErr?.message}`)
           }
-          await parser.destroy()
-          req.payload.logger.info(`Extracted & uploaded ${pageImageMap.size} page diagrams to R2.`)
-        } catch (mediaErr: any) {
-          req.payload.logger.warn(`Diagram extraction warning: ${mediaErr?.message}`)
         }
 
         // ─────────────────────────────────────────────────────────
@@ -177,10 +244,13 @@ export const processDocument: CollectionAfterChangeHook = async ({
           // ─────────────────────────────────────────────────────────
           // OCR FALLBACK: For scanned, CamScanner & handwritten pages (< 40 chars)
           // ─────────────────────────────────────────────────────────
-          if (pageText.length < 40) {
+          if (pageText.length < 40 && PDFParseClass) {
             req.payload.logger.info(`Page ${pageNumber} has low text density (${pageText.length} chars). Triggering OCR fallback...`)
             try {
-              const ocrParser: any = new PDFParse(new Uint8Array(fileBuffer))
+              const ocrParser: any = new PDFParseClass({
+                data: new Uint8Array(fileBuffer),
+                ...(CanvasFactoryClass ? { CanvasFactory: CanvasFactoryClass } : {}),
+              })
               await ocrParser.load()
               const shotRes = await ocrParser.getScreenshot({ pageNumber } as any)
               const pData = shotRes.pages.find((p: any) => p.pageNumber === pageNumber)
