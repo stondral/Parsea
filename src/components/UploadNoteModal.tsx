@@ -108,7 +108,7 @@ export function UploadNoteModal({ isOpen, onClose, onSuccess }: UploadNoteModalP
         {/* Form */}
         <form onSubmit={handleSubmit} className="modal-body">
           {errorMsg && <div className="alert alert-error">{errorMsg}</div>}
-          {successMsg && <div className="alert alert-success">✓ {successMsg}</div>}
+          {successMsg && <div className="alert alert-success"><svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'inline-block', verticalAlign: 'middle', marginRight: 5 }}><polyline points="1.5,6.5 5,10 11.5,3"/></svg> {successMsg}</div>}
 
           {/* File drop zone */}
           <div className="form-group">
@@ -125,7 +125,9 @@ export function UploadNoteModal({ isOpen, onClose, onSuccess }: UploadNoteModalP
                 disabled={isUploading}
                 style={{ display: 'none' }}
               />
-              <span className="file-drop-icon">PDF</span>
+              <span className="file-drop-icon">
+                <svg width="36" height="36" viewBox="0 0 36 36" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ margin: '0 auto', display: 'block', color: 'var(--text-muted)' }}><path d="M6 26v2a2 2 0 0 0 2 2h20a2 2 0 0 0 2-2v-2"/><polyline points="12,14 18,8 24,14"/><line x1="18" y1="8" x2="18" y2="24"/></svg>
+              </span>
               <p className={`file-drop-label${file ? ' has-file' : ''}`}>
                 {file ? file.name : 'Click to browse or drag & drop a PDF'}
               </p>

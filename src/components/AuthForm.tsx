@@ -54,7 +54,13 @@ export function AuthForm({ mode }: AuthFormProps) {
       <section className="auth-visual" aria-label="A quiet place to study">
         <div className="auth-visual-top">
           <Link href="/" className="auth-brand">
-            <span className="auth-brand-mark">P</span>
+            <img
+              src="https://img.icons8.com/bubbles/100/learning.png"
+              alt="Parsea"
+              width={32}
+              height={32}
+              style={{ display: 'block', flexShrink: 0 }}
+            />
             <span>Parsea</span>
           </Link>
           <span className="auth-visual-kicker">ACADEMIC INTELLIGENCE</span>
@@ -74,7 +80,13 @@ export function AuthForm({ mode }: AuthFormProps) {
         <div className="auth-panel-inner">
           <div className="auth-mobile-brand">
             <Link href="/" className="auth-brand">
-              <span className="auth-brand-mark">P</span>
+              <img
+                src="https://img.icons8.com/bubbles/100/learning.png"
+                alt="Parsea"
+                width={32}
+                height={32}
+                style={{ display: 'block', flexShrink: 0 }}
+              />
               <span>Parsea</span>
             </Link>
           </div>

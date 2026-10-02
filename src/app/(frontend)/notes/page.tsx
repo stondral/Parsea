@@ -163,7 +163,9 @@ function NotesContent() {
 
           {!isLoading && notes.length === 0 && (
             <div className="empty-state library-empty-state">
-              <span className="empty-state-icon">No files</span>
+              <span className="empty-state-icon">
+                <svg width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ margin: '0 auto', display: 'block', color: 'var(--text-muted)' }}><path d="M8 6h16l8 8v22H8V6Z"/><path d="M24 6v8h8"/><line x1="13" y1="20" x2="27" y2="20"/><line x1="13" y1="26" x2="21" y2="26"/></svg>
+              </span>
               <h3 className="empty-state-title">No materials found</h3>
               <p className="empty-state-description">
                 {searchQuery || selectedSubject || selectedType !== 'All'

@@ -32,13 +32,13 @@ type SubjectsInput = {
   semester?: number
 }
 
-let payloadPromise: Promise<Payload> | null = null
+// Eagerly kick off Payload initialisation at module load time so the first
+// tRPC request doesn't pay the cold-start penalty (was causing ~50 s delays).
+let payloadPromise: Promise<Payload> = config.then((payloadConfig) =>
+  getPayload({ config: payloadConfig })
+)
 
-async function getAppPayload() {
-  if (!payloadPromise) {
-    payloadPromise = config.then((payloadConfig) => getPayload({ config: payloadConfig }))
-  }
-
+function getAppPayload() {
   return payloadPromise
 }
 

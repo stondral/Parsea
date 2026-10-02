@@ -1,6 +1,4 @@
 import type { CollectionAfterChangeHook } from 'payload'
-import { PDFLoader } from '@langchain/community/document_loaders/fs/pdf'
-import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters'
 import { getEmbedding } from '@/lib/embeddings'
 import { uploadToR2, R2_BUCKET } from '@/lib/r2'
 import { extractTextFromImage } from '@/lib/ocr'
@@ -10,53 +8,39 @@ import { sql } from 'drizzle-orm'
 
 // Polyfill browser globals needed by pdfjs-dist / pdf-parse if not already present in Node runtime
 if (typeof (globalThis as any).DOMMatrix === 'undefined') {
-  try {
-    const { DOMMatrix } = require('@napi-rs/canvas')
-    if (DOMMatrix) (globalThis as any).DOMMatrix = DOMMatrix
-  } catch {
-    class DOMMatrixFallback {
-      a = 1; b = 0; c = 0; d = 1; e = 0; f = 0
-      m11 = 1; m12 = 0; m13 = 0; m14 = 0
-      m21 = 0; m22 = 1; m23 = 0; m24 = 0
-      m31 = 0; m32 = 0; m33 = 1; m34 = 0
-      m41 = 0; m42 = 0; m43 = 0; m44 = 1
-      is2D = true
-      isIdentity = true
-      translate() { return this }
-      scale() { return this }
-      multiply() { return this }
-      preMultiplySelf() { return this }
-      invertSelf() { return this }
-      setTransform() { return this }
-    }
-    ;(globalThis as any).DOMMatrix = DOMMatrixFallback
+  class DOMMatrixFallback {
+    a = 1; b = 0; c = 0; d = 1; e = 0; f = 0
+    m11 = 1; m12 = 0; m13 = 0; m14 = 0
+    m21 = 0; m22 = 1; m23 = 0; m24 = 0
+    m31 = 0; m32 = 0; m33 = 1; m34 = 0
+    m41 = 0; m42 = 0; m43 = 0; m44 = 1
+    is2D = true
+    isIdentity = true
+    translate() { return this }
+    scale() { return this }
+    multiply() { return this }
+    preMultiplySelf() { return this }
+    invertSelf() { return this }
+    setTransform() { return this }
   }
+  ;(globalThis as any).DOMMatrix = DOMMatrixFallback
 }
 if (typeof (globalThis as any).Path2D === 'undefined') {
-  try {
-    const { Path2D } = require('@napi-rs/canvas')
-    if (Path2D) (globalThis as any).Path2D = Path2D
-  } catch {
-    class Path2DFallback {
-      addPath() {}
-      closePath() {}
-    }
-    ;(globalThis as any).Path2D = Path2DFallback
+  class Path2DFallback {
+    addPath() {}
+    closePath() {}
   }
+  ;(globalThis as any).Path2D = Path2DFallback
 }
 if (typeof (globalThis as any).ImageData === 'undefined') {
-  try {
-    const { ImageData } = require('@napi-rs/canvas')
-    if (ImageData) (globalThis as any).ImageData = ImageData
-  } catch {
-    class ImageDataFallback {
-      data = new Uint8ClampedArray(0)
-      width = 0
-      height = 0
-    }
-    ;(globalThis as any).ImageData = ImageDataFallback
+  class ImageDataFallback {
+    data = new Uint8ClampedArray(0)
+    width = 0
+    height = 0
   }
+  ;(globalThis as any).ImageData = ImageDataFallback
 }
+
 
 function slugify(text: string): string {
   return text
@@ -205,6 +189,7 @@ export const processDocument: CollectionAfterChangeHook = async ({
         // ─────────────────────────────────────────────────────────
         // 3. PARSE PDF & SPLIT CHUNKS
         // ─────────────────────────────────────────────────────────
+        const { PDFLoader } = await import('@langchain/community/document_loaders/fs/pdf')
         const loader = new PDFLoader(filePath)
         const rawDocs = await loader.load()
         req.payload.logger.info(`Extracted ${rawDocs.length} pages from ${doc.filename}`)
@@ -221,6 +206,7 @@ export const processDocument: CollectionAfterChangeHook = async ({
           })
         }
 
+        const { RecursiveCharacterTextSplitter } = await import('@langchain/textsplitters')
         const splitter = new RecursiveCharacterTextSplitter({
           chunkSize: 1000,
           chunkOverlap: 200,

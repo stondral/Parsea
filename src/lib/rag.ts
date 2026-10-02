@@ -35,6 +35,7 @@ export interface ChatMessage {
 export interface ConversationOptions {
   conversationId?: string
   history?: ChatMessage[]
+  targetLanguage?: string
 }
 
 export interface SessionContext {

@@ -148,7 +148,9 @@ export default function CourseCatalogPage() {
 
           {!subjectsQuery.isLoading && subjects.length === 0 && (
             <div className="empty-state">
-              <span className="empty-state-icon">No data</span>
+              <span className="empty-state-icon">
+                <svg width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ margin: '0 auto', display: 'block', color: 'var(--text-muted)' }}><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="22" y="6" width="12" height="12" rx="2"/><rect x="6" y="22" width="12" height="12" rx="2"/><rect x="22" y="22" width="12" height="12" rx="2"/></svg>
+              </span>
               <h3 className="empty-state-title">No subjects in Semester {activeSem}</h3>
               <p className="empty-state-description">Choose another semester or add subjects in the admin panel.</p>
               <Link href="/admin" target="_blank" className="btn btn-secondary">Open admin</Link>

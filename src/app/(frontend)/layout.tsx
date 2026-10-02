@@ -5,6 +5,10 @@ import './styles.css'
 export const metadata = {
   description: 'Parsea — AI-powered academic assistant for organised, intelligent study',
   title: 'Parsea',
+  icons: {
+    icon: 'https://img.icons8.com/bubbles/100/learning.png',
+    apple: 'https://img.icons8.com/bubbles/100/learning.png',
+  },
 }
 
 export default async function RootLayout(props: { children: React.ReactNode }) {

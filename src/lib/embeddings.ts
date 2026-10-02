@@ -14,13 +14,13 @@ export async function getEmbedding(text: string): Promise<number[]> {
 
   // 2. Compute via Xenova transformer pipeline
   if (!pipelinePromise) {
-    const { pipeline } = await import('@xenova/transformers')
+    const { pipeline } = await import('@huggingface/transformers')
     pipelinePromise = pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2')
   }
 
   const pipe = await pipelinePromise
   const output = await pipe(clean, { pooling: 'mean', normalize: true })
-  const embedding = Array.from(output.data) as number[]
+  const embedding = Array.from(output.data as Float32Array) as number[]
 
   // 3. Cache for 7 days (604800s)
   await setCache(cacheKey, embedding, 604800)

@@ -57,7 +57,13 @@ export function LMSNavbar({ onOpenUpload, branch = 'COMPS', semester = 3 }: LMSN
 
       {/* Brand */}
       <Link href="/notes" className="navbar-brand" onClick={() => setMenuOpen(false)}>
-        <span className="navbar-logo-icon">P</span>
+        <img
+          src="https://img.icons8.com/bubbles/100/learning.png"
+          alt="Parsea"
+          width={28}
+          height={28}
+          style={{ display: 'block', flexShrink: 0 }}
+        />
         <span className="navbar-logo-name">Parsea</span>
         <span className="navbar-badge">Academic Intelligence</span>
       </Link>
