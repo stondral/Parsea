@@ -64,7 +64,7 @@ export default function CourseCatalogPage() {
   const subjects = (subjectsQuery.data ?? []) as SubjectItem[]
 
   return (
-    <div className="lms-shell parsea-home">
+    <div className="lms-shell parsea-theme parsea-home">
       <AmbientGrid />
       <LMSNavbar onOpenUpload={() => setIsUploadOpen(true)} semester={activeSem} />
       <main className="home-content">

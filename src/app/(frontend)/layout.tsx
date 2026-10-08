@@ -1,6 +1,7 @@
 import React from 'react'
 import { TRPCProvider } from '@/trpc/Provider'
 import './styles.css'
+import './theme.css'
 
 export const metadata = {
   description: 'Parsea — AI-powered academic assistant for organised, intelligent study',

@@ -3,6 +3,7 @@ import { getPayload } from 'payload'
 import config from '@/payload.config'
 import { notFound } from 'next/navigation'
 import { getPresignedDownloadUrl } from '@/lib/r2'
+import { PDFCircleSearch } from '@/components/PDFCircleSearch'
 
 interface PDFPageProps {
   params: Promise<{ id: string }>
@@ -18,7 +19,8 @@ interface ExtractedVisual {
 export default async function PDFViewerPage(props: PDFPageProps) {
   const params = await props.params
   const searchParams = await props.searchParams
-  const pageNumber = searchParams.page ? parseInt(searchParams.page, 10) : 1
+  const requestedPage = Number(searchParams.page)
+  const pageNumber = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1
 
   const payloadConfig = await config
   const payload = await getPayload({ config: payloadConfig })
@@ -56,10 +58,7 @@ export default async function PDFViewerPage(props: PDFPageProps) {
     limit: 100,
     sort: 'pageNumber',
     where: {
-      and: [
-        { document: { equals: docId } },
-        { hasImage: { equals: true } },
-      ],
+      and: [{ document: { equals: docId } }, { hasImage: { equals: true } }],
     },
   })
 
@@ -85,7 +84,6 @@ export default async function PDFViewerPage(props: PDFPageProps) {
     (visual, index, all) => all.findIndex((item) => item.page === visual.page) === index,
   )
 
-  const pdfViewerUrl = `${directPdfUrl}#page=${pageNumber}`
   const subjectName = typeof doc.subject === 'object' ? doc.subject?.name : 'Academic Notes'
   const chapterName = doc.chapter || doc.name
 
@@ -93,17 +91,27 @@ export default async function PDFViewerPage(props: PDFPageProps) {
     <div className="pdf-viewer-shell">
       <header className="pdf-viewer-header">
         <div className="pdf-viewer-heading">
-          <Link href="/notes" className="pdf-back-link">Back to library</Link>
+          <Link href="/notes" className="pdf-back-link">
+            Back to library
+          </Link>
           <div>
             <strong>{doc.name}</strong>
-            <span>{subjectName} - {chapterName}</span>
+            <span>
+              {subjectName} - {chapterName}
+            </span>
           </div>
         </div>
 
         <div className="pdf-viewer-actions">
           {isR2 && <span className="pdf-storage-badge">R2 direct</span>}
           <span className="pdf-page-badge">Page {pageNumber}</span>
-          <a href={directPdfUrl} target="_blank" rel="noopener noreferrer" download className="pdf-download-link">
+          <a
+            href={directPdfUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            download
+            className="pdf-download-link"
+          >
             Download PDF
           </a>
         </div>
@@ -111,7 +119,14 @@ export default async function PDFViewerPage(props: PDFPageProps) {
 
       <div className={`pdf-viewer-workspace${uniqueVisuals.length ? ' has-visuals' : ''}`}>
         <div className="pdf-frame-wrap">
-          <iframe src={pdfViewerUrl} title={doc.name} className="pdf-frame" />
+          <PDFCircleSearch
+            url={directPdfUrl}
+            title={doc.name}
+            initialPage={pageNumber}
+            subject={subjectName}
+            branch={doc.subject?.semester?.branch?.name}
+            semester={doc.subject?.semester?.number}
+          />
         </div>
 
         {uniqueVisuals.length > 0 && (
@@ -125,13 +140,18 @@ export default async function PDFViewerPage(props: PDFPageProps) {
             <div className="pdf-visual-list">
               {uniqueVisuals.map((visual) => (
                 <article key={visual.page} className="pdf-visual-card">
-                  <Link href={`/pdf/${params.id}?page=${visual.page}`} className="pdf-visual-image-link">
+                  <Link
+                    href={`/pdf/${params.id}?page=${visual.page}`}
+                    className="pdf-visual-image-link"
+                  >
                     <img src={visual.url} alt={visual.caption} />
                     <span>Page {visual.page}</span>
                   </Link>
                   <div className="pdf-visual-copy">
                     <p>{visual.caption}</p>
-                    <a href={visual.url} target="_blank" rel="noopener noreferrer">Open full size</a>
+                    <a href={visual.url} target="_blank" rel="noopener noreferrer">
+                      Open full size
+                    </a>
                   </div>
                 </article>
               ))}

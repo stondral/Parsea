@@ -1,5 +1,12 @@
-import type { CollectionConfig } from 'payload'
-import { processDocument } from '../hooks/processDocument'
+import type { CollectionConfig, CollectionAfterChangeHook } from 'payload'
+import { invalidateCatalog } from '@/hooks/invalidateCatalog'
+import { deleteDocumentDependents } from '@/hooks/deleteDocumentDependents'
+import { invalidateDocumentAnswers } from '@/hooks/invalidateDocumentAnswers'
+// Reading users or catalog metadata must not load the PDF/ML ingestion stack.
+const ingestDocument: CollectionAfterChangeHook = async (args) => {
+  const { processDocument } = await import('../hooks/processDocument')
+  return processDocument(args)
+}
 
 export const Documents: CollectionConfig = {
   slug: 'documents',
@@ -11,13 +18,21 @@ export const Documents: CollectionConfig = {
     useAsTitle: 'name',
   },
   upload: {
+    bulkUpload: true,
     staticDir: 'media/documents',
     mimeTypes: ['application/pdf'],
   },
   hooks: {
-    afterChange: [processDocument],
+    beforeDelete: [deleteDocumentDependents],
+    afterChange: [ingestDocument, invalidateCatalog, invalidateDocumentAnswers],
+    afterDelete: [invalidateCatalog, invalidateDocumentAnswers],
   },
   fields: [
+    {
+      name: 'batchUpload',
+      type: 'ui',
+      admin: { components: { Field: '/components/AdminBatchUpload#AdminBatchUpload' } },
+    },
     {
       name: 'name',
       type: 'text',

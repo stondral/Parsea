@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { httpBatchLink } from '@trpc/client'
+import { httpBatchLink, httpLink, splitLink } from '@trpc/client'
 import { trpc } from './client'
 
 export function TRPCProvider({ children }: { children: React.ReactNode }) {
@@ -15,17 +15,19 @@ export function TRPCProvider({ children }: { children: React.ReactNode }) {
             refetchOnWindowFocus: false,
           },
         },
-      })
+      }),
   )
 
   const [trpcClient] = useState(() =>
     trpc.createClient({
       links: [
-        httpBatchLink({
-          url: '/api/trpc',
+        splitLink({
+          condition: (operation) => operation.path === 'notes.getStats',
+          true: httpLink({ url: '/api/trpc' }),
+          false: httpBatchLink({ url: '/api/trpc' }),
         }),
       ],
-    })
+    }),
   )
 
   return (

@@ -1,4 +1,5 @@
 import type { CollectionAfterChangeHook } from 'payload'
+import { deleteDocumentDependents } from '@/hooks/deleteDocumentDependents'
 import { getEmbedding } from '@/lib/embeddings'
 import { uploadToR2, R2_BUCKET } from '@/lib/r2'
 import { extractTextFromImage } from '@/lib/ocr'
@@ -221,14 +222,7 @@ export const processDocument: CollectionAfterChangeHook = async ({
 
         // Delete previous chunks/pages on update
         if (operation === 'update') {
-          await req.payload.delete({
-            collection: 'document_pages',
-            where: { document: { equals: doc.id } },
-          })
-          await req.payload.delete({
-            collection: 'chunks',
-            where: { document: { equals: doc.id } },
-          })
+          await deleteDocumentDependents({ id: doc.id, req })
         }
 
         const { RecursiveCharacterTextSplitter } = await import('@langchain/textsplitters')

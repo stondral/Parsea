@@ -1,7 +1,9 @@
 import type { CollectionConfig } from 'payload'
+import { invalidateCatalog } from '@/hooks/invalidateCatalog'
 
 export const Topics: CollectionConfig = {
   slug: 'topics',
+  hooks: { afterChange: [invalidateCatalog], afterDelete: [invalidateCatalog] },
   access: { read: () => true },
   admin: { useAsTitle: 'name', defaultColumns: ['number', 'name', 'module'] },
   fields: [

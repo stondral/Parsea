@@ -23,8 +23,57 @@
 * **Reranker**: Composite Cross-Reranker fusing Reciprocal Rank Fusion (RRF) with exact query term overlap and vector cosine similarity
 * **LLM Engine**: OpenRouter Free Tier (default model: `nex-agi/nex-n2.5-mini:free`, zero cost)
 * **Frontend Markdown & Math**: `react-markdown` + `remark-gfm` + `remark-math` + `rehype-katex` + `katex`
+* **Frontend typography**: Manrope (Google Fonts, weights 400–800), loaded once in the frontend layout with `display=swap` and system sans-serif fallbacks. Do not duplicate the font request with a CSS `@import`.
+
+### Landing-page design (updated 2026-10-08)
+
+* Shared colors, navigation, buttons, and focus styles live in `src/app/(frontend)/theme.css`, scoped to `.parsea-theme`: warm ivory, white, muted periwinkle, and deep-blue accents. Landing, chat, notes, login, and signup use this theme; page-specific layout stays in their own stylesheets.
+* The main white hero card uses a thin deep-blue border and restrained shadow for separation from the grid. The navbar is a floating white panel with a matching deep-blue border and a centered navigation tray. On mobile, its logged-out account action is the same muted light-blue “Get started” signup button as desktop, instead of the “Sign in” text link.
+* `src/components/AmbientGrid.tsx` renders a decorative 56px grid with darker muted lines. Hovered cells fade out; pointer events remain available to content. Reduced-motion and coarse-pointer users receive a static grid. Animation runs only while cells are fading and cleans up listeners and frames.
+* The subject browser retains existing tRPC queries, semester selection, subject links, loading/error/empty states, and the shared upload dialog. The study-chat illustration is explicitly labeled as an example.
+
+### Chat, library, and multi-PDF upload (updated 2026-10-08)
+
+* Chat navigation and workspace use the available viewport width without the shared 1240px cap: 24px outer gutters on desktop, 16px on mobile. The history sidebar keeps its fixed desktop width and mobile drawer behavior; other pages retain their existing width limits.
+* Chat keeps streaming, math, citations, diagram zoom, speech settings, course filters, and saved conversations. Starter prompts fill an editable draft. The composer stays visible, scrolling follows responses only when the reader is near the bottom, and deletion requires confirmation. Mobile history and upload/diagram dialogs support Escape and focus restoration.
+* Notes respects subject and semester URL parameters, groups PDFs by subject/module with optional topic labels, and provides search, type/module filters, retry, and empty states. Its current result limit is 100 files, displayed in the UI. Ask links pass course context to Deep analysis.
+* Login/signup share the theme and brand mark, retain existing auth endpoints, preserve inputs on errors, and provide password visibility controls.
+* `UploadNoteModal` accepts multiple PDFs with editable titles, a shared subject/module/topic, per-file progress, and failed-only retry. Each PDF remains a separate document using the existing upload/ingestion route and canonical embedding/R2 pipeline. Leaving module/topic blank allows the existing filename classifier to organize each file independently.
+* `AdminBatchUpload` adds “Upload multiple PDFs to a module” to the Documents create/edit form and inherits selected relationships. Payload native bulk upload remains enabled on the collection list. This does not change a document into an array of PDFs or create a second embedding implementation.
+
+### Public catalog performance (updated 2026-10-08)
+
+* `src/lib/catalog.ts` is the centralized read-only SQL path for public academic catalog queries. It joins metadata once, applies bound search/course filters before the limit, and counts stats in SQL; it does not initialize Payload or ingestion. Do not reuse it for private/user data or bypass newly introduced collection access restrictions.
+* The notes tRPC router uses the central cache with normalized versioned keys. Subjects/modules/topics cache for one hour; notes/stats for 30 seconds. Collection change/delete hooks invalidate the catalog namespace. Upload dialog queries run only while open, and stats use a separate tRPC HTTP link so they do not hold up batched subjects.
+* RAG in the chat router and document processing in collection hooks load lazily. Preserve these boundaries: catalog requests must not import the PDF/transformer pipeline eagerly.
+* The central Redis helper deduplicates in-flight reads, bounds Redis waits at 600 ms, and temporarily falls back after failures. Its bounded local mirror lasts at most five seconds with Redis configured; without Redis it uses the requested TTL.
+* Verification: TypeScript and seven catalog/cache tests passed. Local catalog measurements were 20–41 ms for cached reads; the first measured subject read was 938 ms. These are local observations, not a production cold-start benchmark or a zero-second guarantee.
+
+### Document deletion (updated 2026-10-08)
+
+* Required `document_pages.document_id` and `chunks.document_id` columns currently have foreign keys configured with `ON DELETE SET NULL`. Deleting a parent with dependent records therefore fails with PostgreSQL `23502`. Do not solve this by allowing orphaned pages or vectors.
+* `src/hooks/deleteDocumentDependents.ts` is the shared cleanup used by Documents' `beforeDelete` hook and re-ingestion on update. It deletes only that document's chunks/pages, passes the parent's Payload request to retain its transaction, and aborts when bulk cleanup reports failures. Existing parent delete access checks remain unchanged.
+* Document changes/deletes also invalidate current `rag:v3:` and legacy `rag:v2:` answer caches through the central Redis helper, preventing old cached citations from surviving removal. Catalog invalidation remains centralized.
+* R2 object lifecycle is unchanged by this relational cleanup. Database verification reproduced the original failure for document 2, verified cleanup followed by deletion, and rolled back all changes; no PDF or records were permanently removed by that check. Five deletion/cache-invalidation tests supplement the seven catalog/cache tests.
+
 
 ---
+
+### Conversation-first chat and PDF selection (updated 2026-10-09)
+
+* `/chat` uses sidebar navigation/account actions, not the landing navbar. A slim course toolbar replaces the duplicated heading/scope card. The composer starts with one line and expands up to 128px; mode, language, and voice stay available in compact menus. Mobile and Focus mode hide settings behind an accessible Settings button.
+* Focus mode hides the sidebar and secondary badges/hints; history opens as a focus-managed drawer. Scope/settings support Escape and focus restoration. Answer typography and internal spacing favor reading, with horizontal scrolling for wide math/code/tables. The outer workspace remains full width.
+* Sources and extracted diagrams are separate, initially collapsed native disclosures. Do not label an answer as grounded unless it has actual retrieved sources: answers without citations say “General explanation · No note sources.” Current Logic documents have no ingested chunks in the inspected database, and screenshots are only available for image-rich pages; UI formatting does not repair ingestion.
+* `PDFCircleSearch` is an opt-in text-selection prototype in `/pdf/[id]`. PDF.js loads only on activation, renders one page, and maps a closed lasso or dragged box to text geometry. Keyboard users can select page text and edit the excerpt. Scans/image-only diagrams explicitly require future OCR/vision support; no OCR or visual understanding is claimed.
+* Explain/practice actions transfer a bounded draft through browser session storage to the existing chat workflow. They never send the selection automatically or put it into the URL. Generation continues through the canonical RAG pipeline; there is no second embedding, storage, or LLM implementation. Direct R2 PDFs need appropriate browser CORS access; standard reading remains available when selection fails.
+* The locally hosted PDF.js worker and Apache license in `public/vendor/pdfjs` are copied from the pinned `pdfjs-dist@5.4.296` package. Update the worker together with that dependency.
+* Verification uses isolated DOM/component tests and TypeScript. Live browser preview was not verified because browser access was declined. No real LLM requests, accounts, uploads, or permanent document deletions were performed in those tests.
+
+### Payload lock-schema repair (updated 2026-10-09)
+
+* A second verified deletion blocker was PostgreSQL `42703`: Payload lock relationships lacked `modules_id`, `topics_id`, and `conversations_id`. `20261009_000000_lock_hierarchy` adds their columns, indexes, and cascade foreign keys idempotently. `npx tsx scripts/repair-lock-hierarchy.ts` applies this targeted repair against the configured database; it does not delete records or files.
+* Derived chunk/page cleanup now uses Payload's adapter bulk delete, with the parent's request/transaction and document-specific filters. These derived collections currently have no delete hooks/uploads. If such lifecycle behavior is added, revisit this bulk optimization rather than silently skipping it. Parent document access checks and normal upload deletion remain intact.
+* The repair was applied locally. Payload document 2 deletion plus cleanup returned no errors in a rollback-only diagnostic (1,078ms), restoring document 2 and all 47 chunks. Physical-file removal and the authenticated admin HTTP path were not exercised by that diagnostic. Existing R2 object lifecycle is unchanged.
 
 ## 2. Global Rules & Invariants for AI Agents
 

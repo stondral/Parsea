@@ -1,6 +1,5 @@
 import { z } from 'zod'
 import { router, publicProcedure } from '../trpc'
-import { askRAG } from '@/lib/rag'
 
 export const chatRouter = router({
   ask: publicProcedure
@@ -13,7 +12,7 @@ export const chatRouter = router({
             z.object({
               role: z.enum(['user', 'assistant']),
               content: z.string(),
-            })
+            }),
           )
           .max(20)
           .optional(),
@@ -26,9 +25,10 @@ export const chatRouter = router({
             topic: z.string().optional(),
           })
           .optional(),
-      })
+      }),
     )
     .mutation(async ({ input }) => {
+      const { askRAG } = await import('@/lib/rag')
       return await askRAG(input.question, input.filters, {
         conversationId: input.conversationId,
         history: input.history,
