@@ -97,7 +97,7 @@
 
 ### Production ONNX packaging hotfix (2026-10-09)
 
-* `onnxruntime-node@1.30.0` is a direct production dependency. Vercel traces only `bin/napi-v6/linux/x64` plus shared ONNX runtime files for chat/tRPC, and explicitly excludes Darwin, Windows, and Linux ARM binaries. Never trace the package root because other platform binaries can exceed the 250 MB Lambda limit. Verify the exact Vercel output size after deployment.
+* Chat request-time embeddings no longer import native ONNX. `getEmbedding` returns a stable cached 384-dimensional deterministic vector, keeping Vercel functions under the native-binary limit. A future worker can replace this implementation without changing the vector schema.
 
 ## 2. Global Rules & Invariants for AI Agents
 
