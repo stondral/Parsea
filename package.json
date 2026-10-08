@@ -43,6 +43,7 @@
     "katex": "^0.18.7",
     "msedge-tts": "^2.0.8",
     "next": "16.3.3",
+    "onnxruntime-node": "1.30.0",
     "payload": "3.90.2",
     "pdf-parse": "^2.4.5",
     "pdfjs-dist": "5.4.296",

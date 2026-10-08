@@ -52,6 +52,14 @@ const nextConfig: NextConfig = {
     'dotenv',
   ],
 
+  // Keep ONNX's native binding in Vercel's serverless trace. Transformers.js
+  // reaches it through a conditional export, which can otherwise be omitted.
+  outputFileTracingIncludes: {
+    '/api/chat': ['node_modules/onnxruntime-node/**/*', 'node_modules/onnxruntime-common/**/*'],
+    '/api/chat/stream': ['node_modules/onnxruntime-node/**/*', 'node_modules/onnxruntime-common/**/*'],
+    '/api/trpc/[trpc]': ['node_modules/onnxruntime-node/**/*', 'node_modules/onnxruntime-common/**/*'],
+  },
+
   images: {
     localPatterns: [
       {

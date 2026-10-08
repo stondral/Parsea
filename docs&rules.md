@@ -95,6 +95,10 @@
 * PDF scan OCR goes directly to the existing Tesseract.js helper (`preferLocal`), avoiding a vision API wait. Other callers retain vision-first behavior with a bounded timeout. Workers terminate in `finally`, including recognition failures. First-use language-data downloads still require network access; this is not a fully offline or serverless-timeout guarantee.
 * Regression tests cover all-scan PDFs returning zero text pages, mixed text/scanned pages, local-OCR selection, and worker cleanup. Blank/unreadable scans still produce an honest strict indexing failure. No real document was re-indexed by these tests; production checking remains on hold until the user pushes.
 
+### Production ONNX packaging hotfix (2026-10-09)
+
+* `onnxruntime-node@1.30.0` is now a direct production dependency rather than only a Transformers.js transitive dependency. Next file tracing explicitly includes the ONNX runtime packages for chat and tRPC server traces. This addresses Vercel's `Cannot find module 'onnxruntime-node'` error; verify after deployment.
+
 ## 2. Global Rules & Invariants for AI Agents
 
 ### Rule 1: No Duplicate Functions ("Don't create 2 funcs for the same job")
