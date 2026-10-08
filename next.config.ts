@@ -69,6 +69,23 @@ const nextConfig: NextConfig = {
       'node_modules/onnxruntime-common/**/*',
     ],
   },
+  outputFileTracingExcludes: {
+    '/api/chat': [
+      'node_modules/onnxruntime-node/bin/napi-v6/darwin/**/*',
+      'node_modules/onnxruntime-node/bin/napi-v6/win32/**/*',
+      'node_modules/onnxruntime-node/bin/napi-v6/linux/arm64/**/*',
+    ],
+    '/api/chat/stream': [
+      'node_modules/onnxruntime-node/bin/napi-v6/darwin/**/*',
+      'node_modules/onnxruntime-node/bin/napi-v6/win32/**/*',
+      'node_modules/onnxruntime-node/bin/napi-v6/linux/arm64/**/*',
+    ],
+    '/api/trpc/[trpc]': [
+      'node_modules/onnxruntime-node/bin/napi-v6/darwin/**/*',
+      'node_modules/onnxruntime-node/bin/napi-v6/win32/**/*',
+      'node_modules/onnxruntime-node/bin/napi-v6/linux/arm64/**/*',
+    ],
+  },
 
   images: {
     localPatterns: [
