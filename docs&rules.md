@@ -97,7 +97,7 @@
 
 ### Production ONNX packaging hotfix (2026-10-09)
 
-* `onnxruntime-node@1.30.0` is now a direct production dependency rather than only a Transformers.js transitive dependency. Next file tracing explicitly includes the ONNX runtime packages for chat and tRPC server traces. This addresses Vercel's `Cannot find module 'onnxruntime-node'` error; verify after deployment.
+* `onnxruntime-node@1.30.0` is a direct production dependency. Vercel traces only `bin/napi-v6/linux/x64` plus shared ONNX runtime files for chat/tRPC; never trace the package root because other platform binaries can exceed the 250 MB Lambda limit. Verify the exact Vercel output size after deployment.
 
 ## 2. Global Rules & Invariants for AI Agents
 

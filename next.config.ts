@@ -52,12 +52,22 @@ const nextConfig: NextConfig = {
     'dotenv',
   ],
 
-  // Keep ONNX's native binding in Vercel's serverless trace. Transformers.js
-  // reaches it through a conditional export, which can otherwise be omitted.
+  // Keep only Vercel's Linux x64 ONNX native binding in serverless traces.
+  // Tracing the package root would include Windows/macOS/ARM binaries and can
+  // push each Lambda past Vercel's 250 MB uncompressed limit.
   outputFileTracingIncludes: {
-    '/api/chat': ['node_modules/onnxruntime-node/**/*', 'node_modules/onnxruntime-common/**/*'],
-    '/api/chat/stream': ['node_modules/onnxruntime-node/**/*', 'node_modules/onnxruntime-common/**/*'],
-    '/api/trpc/[trpc]': ['node_modules/onnxruntime-node/**/*', 'node_modules/onnxruntime-common/**/*'],
+    '/api/chat': [
+      'node_modules/onnxruntime-node/bin/napi-v6/linux/x64/**/*',
+      'node_modules/onnxruntime-common/**/*',
+    ],
+    '/api/chat/stream': [
+      'node_modules/onnxruntime-node/bin/napi-v6/linux/x64/**/*',
+      'node_modules/onnxruntime-common/**/*',
+    ],
+    '/api/trpc/[trpc]': [
+      'node_modules/onnxruntime-node/bin/napi-v6/linux/x64/**/*',
+      'node_modules/onnxruntime-common/**/*',
+    ],
   },
 
   images: {
