@@ -41,7 +41,8 @@ describe('document deletion', () => {
     const { Documents } = await import('@/collections/Documents')
     expect(Documents.hooks?.beforeDelete).toContain(deleteDocumentDependents)
     expect(Documents.hooks?.afterDelete).toContain(invalidateDocumentAnswers)
-    expect(Documents.access?.delete).toBeUndefined()
+    const { adminOnly } = await import('@/access/admin')
+    expect(Documents.access?.delete).toBe(adminOnly)
   })
 
   it('invalidates current and legacy answer caches so removed sources are not cached', async () => {

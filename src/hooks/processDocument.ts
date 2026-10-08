@@ -1,11 +1,12 @@
 import type { CollectionAfterChangeHook } from 'payload'
 import { deleteDocumentDependents } from '@/hooks/deleteDocumentDependents'
 import { getEmbedding } from '@/lib/embeddings'
-import { uploadToR2, R2_BUCKET } from '@/lib/r2'
+import { uploadToR2, getPresignedDownloadUrl, R2_BUCKET } from '@/lib/r2'
 import { extractTextFromImage } from '@/lib/ocr'
 import path from 'path'
 import fs from 'fs'
 import { sql } from 'drizzle-orm'
+import { buildDocumentStoragePaths } from '@/lib/documentStorage'
 
 // Polyfill browser globals needed by pdfjs-dist / pdf-parse if not already present in Node runtime
 if (typeof (globalThis as any).DOMMatrix === 'undefined') {
@@ -43,17 +44,11 @@ if (typeof (globalThis as any).ImageData === 'undefined') {
 }
 
 
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)+/g, '')
-}
-
 export const processDocument: CollectionAfterChangeHook = async ({
   doc,
   req,
   operation,
+  context,
 }) => {
   if ((operation === 'create' || operation === 'update') && doc.filename) {
     const isPdf =
@@ -71,9 +66,20 @@ export const processDocument: CollectionAfterChangeHook = async ({
         }
 
         const filePath = path.resolve(process.cwd(), 'media/documents', doc.filename)
-        const fileBuffer = fs.readFileSync(filePath)
+        let fileBuffer: Buffer
+        if (req.file?.data) fileBuffer = Buffer.from(req.file.data)
+        else if (fs.existsSync(filePath)) fileBuffer = fs.readFileSync(filePath)
+        else if (doc.storageKey) {
+          const url = await getPresignedDownloadUrl(doc.storageKey, doc.r2Bucket || R2_BUCKET)
+          const response = await fetch(url, { signal: AbortSignal.timeout(30_000) })
+          if (!response.ok) throw new Error('Stored PDF could not be read for indexing.')
+          fileBuffer = Buffer.from(await response.arrayBuffer())
+        } else throw new Error('The original PDF is unavailable. Upload a replacement first.')
 
-        const db = (req.payload.db as any).drizzle
+        // Direct SQL and derived Payload writes must share the parent transaction.
+        const transactionID = await req.transactionID
+        const db = transactionID ? req.payload.db.sessions?.[String(transactionID)]?.db as any : (req.payload.db as any).drizzle
+        if (!db) throw new Error('Document transaction unavailable.')
 
         // Resolve academic hierarchy metadata
         let subjectName = ''
@@ -125,14 +131,10 @@ export const processDocument: CollectionAfterChangeHook = async ({
         // ─────────────────────────────────────────────────────────
         // 1. CLOUDFLARE R2 UPLOAD (PDF Document)
         // ─────────────────────────────────────────────────────────
-        const branchSlug = slugify(branchName || 'general')
-        const semSlug = semesterNumber ? `sem${semesterNumber}` : 'general'
-        const subjectSlug = slugify(subjectName || 'notes')
-        const moduleSlug = moduleNumber ? `module-${slugify(moduleNumber)}-${slugify(moduleName || 'notes')}` : 'general'
-        const topicSlug = topicNumber ? `topic-${slugify(topicNumber)}-${slugify(topicName || 'notes')}` : 'general'
-        const documentSlug = slugify(doc.filename.replace(/\.pdf$/i, '')) || `document-${doc.id}`
-        const r2Folder = `documents/${branchSlug}/${semSlug}/${subjectSlug}/${moduleSlug}/${topicSlug}/${documentSlug}`
-        const r2PdfKey = `${r2Folder}/${doc.filename}`
+        const { folder: r2Folder, pdfKey: r2PdfKey } = buildDocumentStoragePaths({
+          id: doc.id, filename: doc.filename, branchName, semesterNumber, subjectName,
+          moduleNumber, moduleName, topicNumber, topicName,
+        })
 
         try {
           req.payload.logger.info(`Uploading document ${doc.id} to Cloudflare R2: ${r2PdfKey}`)
@@ -176,8 +178,6 @@ export const processDocument: CollectionAfterChangeHook = async ({
               data: new Uint8Array(fileBuffer),
               ...(CanvasFactoryClass ? { CanvasFactory: CanvasFactoryClass } : {}),
             })
-            await parser.load()
-
             const imgRes = await parser.getImage()
             const pagesWithMedia = new Set<number>(
               imgRes.pages
@@ -187,7 +187,7 @@ export const processDocument: CollectionAfterChangeHook = async ({
 
             for (const pageNum of Array.from(pagesWithMedia)) {
               try {
-                const shotRes = await parser.getScreenshot({ pageNumber: pageNum } as any)
+                const shotRes = await parser.getScreenshot({ partial: [pageNum], imageBuffer: true, imageDataUrl: false })
                 const pData = shotRes.pages.find((p: any) => p.pageNumber === pageNum)
                 if (pData && pData.data) {
                   const imgKey = `${r2Folder}/media/page_${pageNum}.png`
@@ -216,9 +216,28 @@ export const processDocument: CollectionAfterChangeHook = async ({
         // 3. PARSE PDF & SPLIT CHUNKS
         // ─────────────────────────────────────────────────────────
         const { PDFLoader } = await import('@langchain/community/document_loaders/fs/pdf')
-        const loader = new PDFLoader(filePath)
-        const rawDocs = await loader.load()
+        const loader = new PDFLoader(new Blob([new Uint8Array(fileBuffer)], { type: 'application/pdf' }))
+        let rawDocs = await loader.load()
         req.payload.logger.info(`Extracted ${rawDocs.length} pages from ${doc.filename}`)
+
+        // Text loaders omit image-only pages, including every page in a scan.
+        // Enumerate physical pages independently so missing pages reach OCR too.
+        if (PDFParseClass) {
+          const inventory = new PDFParseClass({ data: new Uint8Array(fileBuffer) })
+          try {
+            const info = await inventory.getInfo()
+            if (Number.isInteger(info.total) && info.total > 0) {
+              const textPages = new Map(rawDocs.map((page) => [page.metadata.loc?.pageNumber, page]))
+              rawDocs = Array.from({ length: info.total }, (_, index) => {
+                const pageNumber = index + 1
+                return textPages.get(pageNumber) || { pageContent: '', metadata: { loc: { pageNumber } } }
+              })
+              req.payload.logger.info(`Checking all ${info.total} physical pages for text or OCR.`)
+            }
+          } finally {
+            await inventory.destroy()
+          }
+        }
 
         // Delete previous chunks/pages on update
         if (operation === 'update') {
@@ -256,17 +275,18 @@ export const processDocument: CollectionAfterChangeHook = async ({
                 data: new Uint8Array(fileBuffer),
                 ...(CanvasFactoryClass ? { CanvasFactory: CanvasFactoryClass } : {}),
               })
-              await ocrParser.load()
-              const shotRes = await ocrParser.getScreenshot({ pageNumber } as any)
-              const pData = shotRes.pages.find((p: any) => p.pageNumber === pageNumber)
-              await ocrParser.destroy()
-
-              if (pData && pData.data) {
-                const ocrText = await extractTextFromImage(pData.data)
-                if (ocrText && ocrText.length > 20) {
-                  req.payload.logger.info(`OCR successfully extracted ${ocrText.length} characters from Page ${pageNumber}.`)
-                  pageText = `[OCR Transcribed Page ${pageNumber}]:\n${ocrText}`
+              try {
+                const shotRes = await ocrParser.getScreenshot({ partial: [pageNumber], scale: 2, imageBuffer: true, imageDataUrl: false })
+                const pData = shotRes.pages.find((p: any) => p.pageNumber === pageNumber)
+                if (pData?.data) {
+                  const ocrText = await extractTextFromImage(pData.data, { preferLocal: true })
+                  if (ocrText && ocrText.length > 20) {
+                    req.payload.logger.info(`Tesseract extracted ${ocrText.length} characters from Page ${pageNumber}.`)
+                    pageText = `[OCR Transcribed Page ${pageNumber}]:\n${ocrText}`
+                  }
                 }
+              } finally {
+                await ocrParser.destroy()
               }
             } catch (ocrErr: any) {
               req.payload.logger.warn(`OCR fallback failed for page ${pageNumber}: ${ocrErr?.message}`)
@@ -276,6 +296,7 @@ export const processDocument: CollectionAfterChangeHook = async ({
           // Save raw document page
           await req.payload.create({
             collection: 'document_pages',
+            req,
             data: {
               document: doc.id,
               pageNumber,
@@ -303,6 +324,7 @@ export const processDocument: CollectionAfterChangeHook = async ({
         // Process in batches of 16 instead of slow sequential 1-by-1
         // ─────────────────────────────────────────────────────────
         req.payload.logger.info(`Generating embeddings for ${pendingChunks.length} chunks in batches...`)
+        if (context.failOnIngestionError && !pendingChunks.length) throw new Error('No readable text chunks were extracted. This PDF may need OCR or a clearer scan.')
         const BATCH_SIZE = 16
 
         for (let i = 0; i < pendingChunks.length; i += BATCH_SIZE) {
@@ -321,6 +343,7 @@ export const processDocument: CollectionAfterChangeHook = async ({
 
             const createdChunk = await req.payload.create({
               collection: 'chunks',
+              req,
               data: {
                 document: doc.id,
                 pageNumber: item.pageNumber,
@@ -368,6 +391,7 @@ export const processDocument: CollectionAfterChangeHook = async ({
         )
       } catch (error) {
         req.payload.logger.error(`Error ingesting PDF ${doc.id}: ${error}`)
+        if (context.failOnIngestionError) throw error
       }
     }
   }

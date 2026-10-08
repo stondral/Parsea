@@ -1,4 +1,28 @@
 /* A focused, fully featured study workspace. */
+.chat-navigation-rail {
+  display: flex; flex-direction: column; align-items: center; gap: 24px;
+  flex: 0 0 72px; width: 72px; align-self: stretch; padding: 18px 8px;
+  border: 1px solid #b6c3de; border-radius: 999px;
+  background: #edf1f9ed; box-shadow: 0 5px 18px #303d7007;
+}
+.chat-rail-brand { color: #6a7fb3; width: 42px; height: 42px; display: grid; place-items: center; }
+.chat-rail-brand svg { width: 32px; height: 32px; }
+.chat-rail-links { display: flex; flex-direction: column; gap: 12px; width: 100%; }
+.chat-rail-links :is(a, button) { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; width: 100%; min-height: 54px; border: 0; border-radius: 20px; background: transparent; color: #6f82a5; font: inherit; cursor: pointer; text-decoration: none; }
+.chat-rail-links :is(a, button):hover { background: #fff; color: #3c5289; }
+.chat-rail-links button > span { font-size: 1.5rem; line-height: 1; }
+.chat-rail-links small { font-size: .54rem; }
+.chat-rail-links button:disabled { opacity: .4; cursor: not-allowed; }
+.chat-navigation-rail .chat-rail-account { margin: auto 0 4px; }
+.chat-rail-account .navbar-account-trigger { width: 44px; height: 44px; padding: 4px; justify-content: center; border-radius: 50%; border: 1px solid #c9d3e8; background: #fff; }
+.chat-rail-account :is(.navbar-account-copy, .navbar-account-chevron) { display: none; }
+.chat-rail-account .navbar-account-menu { top: auto; bottom: 0; left: calc(100% + 12px); right: auto; width: 190px; }
+.chat-rail-account .navbar-auth-links { display: flex; flex-direction: column; gap: 10px; }
+.parsea-chat .chat-rail-account .navbar-auth-links :is(a, .btn) { text-align: center; margin: 0; font-size: .55rem; padding: 7px 4px; min-height: 32px; border-radius: 12px; white-space: normal; }
+.parsea-chat .chat-rail-account .navbar-auth-links .btn { background: #e1e8f7; border: 1px solid #cad5ed; color: #5b71a3; }
+.parsea-chat .chat-rail-account .navbar-auth-loading { width: 32px; height: 32px; border-radius: 50%; }
+.parsea-chat.is-focus-mode .chat-navigation-rail { display: none; }
+.parsea-chat .chat-navigation-rail :is(a, button):focus-visible { outline: 2px solid #667ac2; outline-offset: 3px; }
 .chat-sidebar-brand {
   display: flex;
   align-items: center;
@@ -1241,6 +1265,34 @@
   .parsea-chat .chat-img-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+/* History is always an on-demand drawer, never a permanent sidebar. */
+.parsea-chat .chat-history-sidebar,
+.parsea-chat.is-focus-mode .chat-history-sidebar {
+  position: fixed; inset: 12px auto 12px 12px;
+  height: calc(100dvh - 24px); width: min(85vw, 310px); flex-basis: auto;
+  z-index: 110; transform: translateX(calc(-100% - 24px)); visibility: hidden;
+  box-shadow: 14px 0 36px #303d701f;
+}
+.parsea-chat .chat-history-sidebar.is-open,
+.parsea-chat.is-focus-mode .chat-history-sidebar.is-open { transform: translateX(0); visibility: visible; }
+.parsea-chat .chat-sidebar-close { display: inline-grid; place-items: center; }
+.parsea-chat .chat-sidebar-backdrop,
+.parsea-chat.is-focus-mode .chat-sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 100; border: 0; background: #242d4638; backdrop-filter: blur(3px); cursor: pointer; }
+@media (max-width: 760px) {
+  .parsea-chat .chat-workspace { flex-direction: column; gap: 10px; margin-top: 10px; }
+  .chat-navigation-rail { flex: 0 0 auto; flex-direction: row; align-self: center; width: fit-content; max-width: 100%; padding: 5px 10px; gap: 12px; height: 54px; }
+  .chat-rail-brand { width: 32px; height: 32px; }
+  .chat-rail-brand svg { width: 26px; height: 26px; }
+  .chat-rail-links { flex-direction: row; width: auto; gap: 6px; }
+  .chat-rail-links :is(a, button) { width: 42px; min-height: 40px; gap: 2px; }
+  .chat-rail-links small { font-size: .47rem; }
+  .chat-navigation-rail .chat-rail-account { margin: 0; }
+  .chat-rail-account .navbar-account-trigger { width: 34px; height: 34px; }
+  .chat-rail-account .navbar-auth-links { gap: 0; }
+  .parsea-chat .chat-rail-account .navbar-auth-links .navbar-signin { display: none; }
+  .parsea-chat .chat-rail-account .navbar-auth-links .btn { max-width: 58px; }
+  .chat-rail-account .navbar-account-menu { top: calc(100% + 10px); bottom: auto; left: auto; right: 0; }
 }
 @media (max-height: 650px) and (max-width: 760px) {
   .chat-ai-disclaimer,

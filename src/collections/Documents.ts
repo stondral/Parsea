@@ -2,8 +2,14 @@ import type { CollectionConfig, CollectionAfterChangeHook } from 'payload'
 import { invalidateCatalog } from '@/hooks/invalidateCatalog'
 import { deleteDocumentDependents } from '@/hooks/deleteDocumentDependents'
 import { invalidateDocumentAnswers } from '@/hooks/invalidateDocumentAnswers'
+import { syncDocumentMetadata } from '@/hooks/syncDocumentMetadata'
+import { adminOnly } from '@/access/admin'
 // Reading users or catalog metadata must not load the PDF/ML ingestion stack.
 const ingestDocument: CollectionAfterChangeHook = async (args) => {
+  // Metadata edits must not re-upload/re-embed the entire PDF.
+  if (args.operation === 'update' && !args.context.forceDocumentIngestion && !args.req.file && args.previousDoc?.filename === args.doc.filename) {
+    return syncDocumentMetadata(args)
+  }
   const { processDocument } = await import('../hooks/processDocument')
   return processDocument(args)
 }
@@ -13,6 +19,8 @@ export const Documents: CollectionConfig = {
   access: {
     read: () => true,
     create: () => true,
+    update: adminOnly,
+    delete: adminOnly,
   },
   admin: {
     useAsTitle: 'name',

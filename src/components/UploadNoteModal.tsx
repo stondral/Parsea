@@ -4,6 +4,7 @@ import React, { useEffect, useState, useRef, useId } from 'react'
 import { trpc } from '@/trpc/client'
 import { classifyDocumentFilename } from '@/lib/documentClassification'
 import { useDialogFocus } from '@/hooks/useDialogFocus'
+import { estimateUploadProgress } from '@/lib/uploadProgress'
 import './upload.css'
 
 interface UploadNoteModalProps {
@@ -55,6 +56,8 @@ export function UploadNoteModal({
   const [isUploading, setIsUploading] = useState(false)
   const [error, setError] = useState('')
   const [dragActive, setDragActive] = useState(false)
+  const [activeStartedAt, setActiveStartedAt] = useState(0)
+  const [progressNow, setProgressNow] = useState(0)
   const dialogRef = useRef<HTMLDivElement>(null)
   const fileInputId = useId()
   const titleId = useId()
@@ -75,6 +78,15 @@ export function UploadNoteModal({
   const completed = uploads.filter((entry) => entry.status === 'uploaded').length
   const pending = uploads.filter((entry) => entry.status !== 'uploaded')
   const firstFile = uploads[0]?.file
+  const activeFile = uploads.find((entry) => entry.status === 'uploading')
+  const estimate = estimateUploadProgress(progressNow - activeStartedAt)
+  const batchPercent = uploads.length ? Math.round((completed + (activeFile ? estimate.percent / 100 : 0)) / uploads.length * 100) : 0
+
+  useEffect(() => {
+    if (!isUploading) return
+    const timer = window.setInterval(() => setProgressNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [isUploading])
 
   useDialogFocus(isOpen, dialogRef, () => {
     if (!isUploading) onClose()
@@ -149,6 +161,9 @@ export function UploadNoteModal({
     let successful = 0
     let failed = 0
     for (const entry of pending) {
+      const startedAt = Date.now()
+      setActiveStartedAt(startedAt)
+      setProgressNow(startedAt)
       setUploads((previous) =>
         previous.map((item) =>
           item.id === entry.id ? { ...item, status: 'uploading', error: undefined } : item,
@@ -270,16 +285,11 @@ export function UploadNoteModal({
           </div>
           {uploads.length > 0 && (
             <div className="parsea-upload-queue">
-              <div className="parsea-upload-progress" role="status" aria-live="polite">
-                <span>
-                  {completed} of {uploads.length} uploaded
-                  {isUploading ? ' · Processing one PDF at a time…' : ''}
-                </span>
-                <progress
-                  value={completed}
-                  max={uploads.length}
-                  aria-label="Batch upload progress"
-                />
+              <div className={`parsea-upload-progress${isUploading ? ' is-working' : ''}`}>
+                <div className="parsea-upload-progress-heading"><strong>{isUploading ? 'A little closer to a clearer library.' : `${completed} of ${uploads.length} PDFs saved`}</strong><span>{batchPercent}%{isUploading ? ' est.' : ''}</span></div>
+                <div className="parsea-upload-meter" role="progressbar" aria-valuenow={batchPercent} aria-valuemin={0} aria-valuemax={100} aria-label={isUploading ? 'Estimated batch upload progress' : 'Confirmed batch upload progress'} aria-valuetext={`${completed} of ${uploads.length} PDFs saved${isUploading ? '; remaining progress is estimated' : ''}`}><span style={{ width: `${batchPercent}%` }} /></div>
+                <p role="status" aria-live="polite">{isUploading ? estimate.message : completed === uploads.length ? 'All uploads confirmed. Your notes have a home.' : 'Your PDFs are ready when you are.'}</p>
+                {isUploading && <small>{completed} of {uploads.length} saved · {activeFile?.file.name}<br />Estimated progress, not a live indexing measurement. Completion waits for the server.</small>}
               </div>
               {uploads.map((entry) => (
                 <div key={entry.id} className="parsea-upload-entry" data-status={entry.status}>

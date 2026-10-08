@@ -41,6 +41,7 @@ interface ChatUser {
   id: string | number
   name?: string
   email?: string
+  role?: string | null
 }
 
 interface ChatMessageItem {
@@ -132,7 +133,6 @@ function ChatWorkspace() {
   const [pendingDeleteId, setPendingDeleteId] = useState<string | number | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [historyError, setHistoryError] = useState('')
-  const [isCompact, setIsCompact] = useState(false)
   const [showLatest, setShowLatest] = useState(false)
   const sidebarRef = useRef<HTMLElement | null>(null)
   const zoomRef = useRef<HTMLDivElement | null>(null)
@@ -270,15 +270,7 @@ function ChatWorkspace() {
     }
   }, [showModelPopover, showVoicePopover, showLangPopover, showComposerSettings, showFilters])
 
-  useEffect(() => {
-    const media = window.matchMedia('(max-width: 920px)')
-    const sync = () => setIsCompact(media.matches)
-    sync()
-    media.addEventListener('change', sync)
-    return () => media.removeEventListener('change', sync)
-  }, [])
-
-  const sidebarIsDrawer = isCompact || focusMode
+  const sidebarIsDrawer = true
   useDialogFocus(historyOpen && sidebarIsDrawer, sidebarRef, () => setHistoryOpen(false))
   useDialogFocus(Boolean(selectedImage), zoomRef, () => setSelectedImage(null))
 
@@ -1134,6 +1126,15 @@ function ChatWorkspace() {
       <AmbientGrid />
 
       <div className="chat-workspace">
+        <nav className="chat-navigation-rail" aria-label="Study workspace navigation" inert={historyOpen || undefined}>
+          <Link href="/" className="chat-rail-brand" aria-label="Parsea home" title="Parsea home"><BrandMark /></Link>
+          <div className="chat-rail-links">
+            <button type="button" aria-label="Start a new chat" title="New chat" onClick={() => handleStartNewChat()} disabled={isStreaming}><span aria-hidden="true">＋</span><small>New</small></button>
+            <Link href="/notes" aria-label="Library" title="Library"><svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d="M3 3h5a3 3 0 0 1 2 1 3 3 0 0 1 2-1h5v13h-5a3 3 0 0 0-2 1 3 3 0 0 0-2-1H3zM10 4v13" /></svg><small>Library</small></Link>
+            <button type="button" aria-label="Conversation history" title="Conversation history" aria-expanded={historyOpen} aria-controls="chat-history" onClick={() => setHistoryOpen(true)}><svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><circle cx="10" cy="10" r="7" /><path d="M10 6v4l3 2" /></svg><small>History</small></button>
+          </div>
+          <AccountMenu user={chatUser} authChecked={!historyLoading} appearance="rail" />
+        </nav>
         <aside
           ref={sidebarRef}
           id="chat-history"

@@ -10,6 +10,7 @@ interface CurrentUser {
   name?: string
   email?: string
   semester?: number
+  role?: string | null
 }
 
 interface LMSNavbarProps {

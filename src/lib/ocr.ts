@@ -5,17 +5,21 @@ import { createWorker } from 'tesseract.js'
  * 1. Tries OpenRouter Vision model for high-accuracy handwriting & LaTeX formula transcription.
  * 2. Automatically falls back to local Tesseract.js (WASM) if the API is unreachable or times out.
  */
-export async function extractTextFromImage(imageBuffer: Buffer | Uint8Array): Promise<string> {
+export async function extractTextFromImage(
+  imageBuffer: Buffer | Uint8Array,
+  options: { preferLocal?: boolean } = {},
+): Promise<string> {
   const base64Image = Buffer.from(imageBuffer).toString('base64')
   const apiKey = process.env.OPENROUTER_API_KEY
 
   // ─────────────────────────────────────────────────────────
   // 1. TIER 1: OpenRouter Vision Model (LaTeX & Handwriting specialist)
   // ─────────────────────────────────────────────────────────
-  if (apiKey) {
+  if (apiKey && !options.preferLocal) {
     try {
       const visionModel = 'meta-llama/llama-3.2-11b-vision-instruct:free'
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        signal: AbortSignal.timeout(12_000),
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -60,13 +64,16 @@ export async function extractTextFromImage(imageBuffer: Buffer | Uint8Array): Pr
   }
 
   // ─────────────────────────────────────────────────────────
-  // 2. TIER 2: Local Tesseract.js Fallback (Offline WebAssembly)
+  // 2. Local Tesseract.js WASM (language data downloads on first use).
   // ─────────────────────────────────────────────────────────
   try {
     const worker = await createWorker('eng')
-    const ret = await worker.recognize(Buffer.from(imageBuffer))
-    await worker.terminate()
-    return ret.data.text.trim()
+    try {
+      const ret = await worker.recognize(Buffer.from(imageBuffer))
+      return ret.data.text.trim()
+    } finally {
+      await worker.terminate()
+    }
   } catch (tessErr) {
     console.error('Local Tesseract OCR error:', tessErr)
     return ''

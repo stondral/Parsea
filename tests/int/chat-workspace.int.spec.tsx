@@ -38,10 +38,16 @@ describe('Conversation-first workspace (isolated DOM, no live API)', () => {
     vi.unstubAllGlobals()
   })
 
-  it('moves navigation/account into the sidebar and keeps a compact editable toolbar', async () => {
+  it('uses a gentle navigation rail and an on-demand history drawer', async () => {
     const { container } = render(<ChatPage />)
     await screen.findByRole('link', { name: 'Get started' })
     expect(container.querySelector('.navbar')).toBeNull()
+    expect(screen.getByRole('navigation', { name: 'Study workspace navigation' })).toBeDefined()
+    expect(container.querySelector('#chat-history')?.getAttribute('aria-hidden')).toBe('true')
+    const railHistory = screen.getByRole('button', { name: 'Conversation history' })
+    fireEvent.click(railHistory)
+    expect(screen.getByRole('dialog', { name: 'Chat history' })).toBeDefined()
+    fireEvent.keyDown(document, { key: 'Escape' })
     expect(container.querySelector('.chat-sidebar-nav')?.textContent).toContain('Library')
     expect(container.querySelector('.chat-toolbar-course')?.textContent).toContain(
       'Discrete Mathematics',

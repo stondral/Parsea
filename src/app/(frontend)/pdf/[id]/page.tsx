@@ -48,9 +48,13 @@ export default async function PDFViewerPage(props: PDFPageProps) {
       directPdfUrl = await getPresignedDownloadUrl(doc.storageKey, doc.r2Bucket || undefined)
       isR2 = true
     } catch (error) {
-      console.error('Failed generating R2 presigned URL, falling back to local:', error)
+      console.error('Failed generating R2 presigned URL:', error)
     }
   }
+
+  // Vercel cannot serve uploads from a previous function's local filesystem.
+  // Do not embed a known-invalid local endpoint and present its JSON as a PDF.
+  const unavailableOnVercel = process.env.VERCEL === '1' && !isR2
 
   const visualChunks = await payload.find({
     collection: 'chunks',
@@ -105,7 +109,7 @@ export default async function PDFViewerPage(props: PDFPageProps) {
         <div className="pdf-viewer-actions">
           {isR2 && <span className="pdf-storage-badge">R2 direct</span>}
           <span className="pdf-page-badge">Page {pageNumber}</span>
-          <a
+          {!unavailableOnVercel && <a
             href={directPdfUrl}
             target="_blank"
             rel="noopener noreferrer"
@@ -113,20 +117,26 @@ export default async function PDFViewerPage(props: PDFPageProps) {
             className="pdf-download-link"
           >
             Download PDF
-          </a>
+          </a>}
         </div>
       </header>
 
       <div className={`pdf-viewer-workspace${uniqueVisuals.length ? ' has-visuals' : ''}`}>
         <div className="pdf-frame-wrap">
-          <PDFCircleSearch
+          {unavailableOnVercel ? <section className="pdf-storage-unavailable" role="alert">
+            <span aria-hidden="true">↥</span>
+            <h1>This PDF needs a fresh upload.</h1>
+            <p>The library record is here, but its cloud PDF is unavailable. This deployment cannot read a PDF saved only on a previous server.</p>
+            <p>An administrator needs to upload the original file again and confirm that its cloud copy is saved.</p>
+            <Link href="/notes">Back to your library →</Link>
+          </section> : <PDFCircleSearch
             url={directPdfUrl}
             title={doc.name}
             initialPage={pageNumber}
             subject={subjectName}
             branch={doc.subject?.semester?.branch?.name}
             semester={doc.subject?.semester?.number}
-          />
+          />}
         </div>
 
         {uniqueVisuals.length > 0 && (

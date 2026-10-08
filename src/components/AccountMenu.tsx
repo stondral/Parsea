@@ -5,9 +5,9 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 
 interface AccountMenuProps {
-  user: { name?: string; email?: string; semester?: number } | null
+  user: { name?: string; email?: string; semester?: number; role?: string | null } | null
   authChecked: boolean
-  appearance?: 'navbar' | 'sidebar'
+  appearance?: 'navbar' | 'sidebar' | 'rail'
   calm?: boolean
 }
 
@@ -57,7 +57,7 @@ export function AccountMenu({
     }
   }
   return (
-    <div ref={ref} className={`navbar-account${appearance === 'sidebar' ? ' chat-account' : ''}`}>
+    <div ref={ref} className={`navbar-account${appearance === 'sidebar' ? ' chat-account' : appearance === 'rail' ? ' chat-rail-account' : ''}`}>
       {!authChecked ? (
         <span className="navbar-auth-loading" aria-hidden="true" />
       ) : user ? (
@@ -82,9 +82,9 @@ export function AccountMenu({
           </button>
           {open && (
             <div className="navbar-account-menu" role="group" aria-label="Account actions">
-              <Link href="/admin" target="_blank" onClick={() => setOpen(false)}>
-                Admin portal ↗
-              </Link>
+              {user.role === 'admin' && (
+                <Link href="/administrator" onClick={() => setOpen(false)}>Admin workspace</Link>
+              )}
               <button type="button" onClick={signOut} disabled={signingOut}>
                 {signingOut ? 'Signing out…' : 'Sign out'}
               </button>
