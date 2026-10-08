@@ -1,11 +1,8 @@
 /* ─────────────────────────────────────────────────────────────────────────── */
 /* PARSEA LMS — Design System                                                  */
 /* Palette: Warm white bg · Forest green primary · Amber accent                */
-/* Font: Inter (Google Fonts)                                                  */
+/* Font: Manrope (Google Fonts, loaded once in the frontend layout)             */
 /* ─────────────────────────────────────────────────────────────────────────── */
-
-/* Import Inter from Google Fonts */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 /* ── CSS Design Tokens ────────────────────────────────────────────────────── */
 :root {
@@ -89,7 +86,7 @@
   --shadow-xl: 0 20px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.06);
 
   /* Typography */
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-sans: 'Manrope', system-ui, -apple-system, sans-serif;
   --font-mono: 'Roboto Mono', ui-monospace, monospace;
 
   --text-xs:   0.72rem;   /* 11.5px */
@@ -1849,7 +1846,7 @@ body{background:var(--bg-base)}.lms-shell{min-height:100vh;background:var(--bg-b
 /* Desktop shell and ChatGPT-style conversation surface */
 html,body{overflow-x:clip}
 .navbar{justify-content:flex-start;gap:28px;padding-inline:max(24px,calc((100% - 1440px)/2));}
-.navbar-brand{min-width:max-content}
+.navbar-brand{min-width:max-content;gap:12px}.navbar-brand-mark{width:38px;height:38px}.navbar-logo-name{font-size:1.22rem}
 .navbar-nav{margin-left:clamp(24px,7vw,120px)}
 .navbar-actions{margin-left:auto}
 .nav-glyph{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border:1px solid currentColor;border-radius:50%;font-size:.58rem;font-weight:800;letter-spacing:.02em}
@@ -1949,6 +1946,7 @@ html,body{overflow-x:clip}
 .summary-label{display:block;font-size:.68rem;color:var(--green-600);font-weight:800;letter-spacing:.11em;text-transform:uppercase;margin-bottom:7px}.library-summary>div:first-child strong{font-family:Georgia,'Times New Roman',serif;font-size:1.4rem;font-weight:400}.library-summary-stats{display:flex;gap:28px;color:var(--text-muted);font-size:.78rem}.library-summary-stats strong{font-family:Georgia,'Times New Roman',serif;font-size:1.25rem;font-weight:400;color:var(--text-primary);margin-right:4px}
 .library-controls{margin:28px 0 44px;padding:16px 18px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:10px}
 .library-search-row{display:flex;align-items:center;gap:20px}.library-search{display:flex;align-items:center;gap:10px;flex:1;border:1px solid var(--border-default);background:var(--bg-base);border-radius:7px;padding:0 14px}.search-mark{font-weight:800;color:var(--green-600);font-size:1.2rem}.library-search input{width:100%;height:44px;border:0;outline:0;background:transparent;color:var(--text-primary);font:inherit}.library-result-count{font-size:.78rem;color:var(--text-muted);white-space:nowrap}.library-filter-row{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-top:14px}.library-subjects{display:flex;align-items:center;gap:7px;min-width:0;overflow-x:auto;padding-bottom:2px}.library-subjects .filter-group-label{margin-right:4px}.library-subjects .chip{white-space:nowrap}
+.form-hint{margin:8px 0 0;font-size:.78rem;color:var(--green-700);line-height:1.45}.form-label-optional{font-weight:400;color:var(--text-muted);text-transform:none;letter-spacing:0}
 .library-results-heading{display:flex;align-items:end;justify-content:space-between;border-bottom:1px solid var(--border-default);padding-bottom:16px;margin-bottom:0}.library-results-heading h2{font-family:Georgia,'Times New Roman',serif;font-size:2rem;font-weight:400;margin-top:6px}.library-document-list{display:flex;flex-direction:column}.library-document{display:grid;grid-template-columns:48px minmax(0,1fr) 150px 150px;align-items:center;gap:18px;padding:18px 0;border-bottom:1px solid var(--border-subtle)}.library-type{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:800;letter-spacing:.05em}.library-type-green{background:#dce9df;color:var(--green-700)}.library-type-amber{background:#f6ead6;color:#9b5d2d}.library-type-purple{background:#e9e5ee;color:#6b5577}.library-document-topline{display:flex;gap:10px;align-items:center;margin-bottom:5px}.library-document-type{font-size:.66rem;font-weight:800;color:var(--green-600);letter-spacing:.1em;text-transform:uppercase}.library-document-semester{font-size:.68rem;color:var(--text-muted)}.library-document h3{font-size:1.08rem;font-weight:650;margin-bottom:4px}.library-document p{font-size:.8rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.library-document p strong{color:var(--text-secondary);font-weight:650}.library-document-meta{display:flex;flex-direction:column;gap:4px;font-size:.73rem;color:var(--text-muted)}.library-document-actions{display:flex;gap:7px;justify-content:flex-end}.library-document-skeleton{height:80px;border-bottom:1px solid var(--border-subtle);background:linear-gradient(90deg,transparent,#ece9df,transparent);background-size:200% 100%;animation:skeleton-shimmer 1.6s ease-in-out infinite}.library-empty-state{margin-top:18px}
 @media(max-width:760px){.library-page{width:calc(100% - 32px);padding:34px 0 82px}.library-hero{display:block;padding-bottom:26px}.library-hero h1{font-size:2.8rem}.library-hero-actions{margin-top:24px}.library-hero-actions .btn{flex:1;justify-content:center}.library-summary{display:block;padding:20px 0}.library-summary-stats{justify-content:space-between;gap:10px;margin-top:18px}.library-summary-stats span{font-size:.68rem}.library-controls{padding:12px;margin:22px 0 34px}.library-search-row{display:block}.library-result-count{display:block;margin-top:9px}.library-filter-row{display:block}.library-subjects{margin-bottom:12px}.library-document{grid-template-columns:40px minmax(0,1fr);gap:11px;padding:16px 0}.library-type{width:36px;height:36px;font-size:.6rem}.library-document h3{font-size:1rem}.library-document-meta{grid-column:2;flex-direction:row;gap:10px}.library-document-actions{grid-column:2;justify-content:flex-start;margin-top:3px}.library-results-heading h2{font-size:1.65rem}}
 
@@ -2007,6 +2005,29 @@ html,body{overflow-x:clip}
 @keyframes authPulse{0%,100%{opacity:.55}50%{opacity:1}}
 .navbar-account{position:relative}.navbar-account-trigger{display:flex;align-items:center;gap:9px;padding:4px 5px 4px 4px;border:1px solid var(--border-default);border-radius:6px;background:var(--bg-surface);color:var(--text-primary);cursor:pointer;font:inherit;text-align:left}.navbar-account-avatar{display:grid;place-items:center;width:28px;height:28px;border-radius:5px;background:var(--green-800);color:#fff;font-size:.75rem;font-weight:800}.navbar-account-copy{display:grid;gap:1px;min-width:92px}.navbar-account-copy strong{font-size:.73rem;line-height:1.1}.navbar-account-copy small{color:var(--text-muted);font-size:.62rem;line-height:1.1}.navbar-account-chevron{padding:0 3px;color:var(--text-muted);font-size:1rem}.navbar-account-menu{position:absolute;z-index:30;top:calc(100% + 8px);right:0;display:grid;min-width:150px;padding:5px;border:1px solid var(--border-default);border-radius:6px;background:var(--bg-surface);box-shadow:0 12px 28px rgba(17,29,19,.14)}.navbar-account-menu a,.navbar-account-menu button{padding:9px 10px;border:0;background:transparent;color:var(--text-secondary);font:inherit;font-size:.76rem;text-align:left;text-decoration:none;cursor:pointer;border-radius:4px}.navbar-account-menu a:hover,.navbar-account-menu button:hover{background:var(--bg-surface-2);color:var(--green-700)}
 @media(max-width:760px){.navbar-auth-links{flex-direction:column;align-items:stretch;gap:8px}.navbar-account{width:100%}.navbar-account-trigger{width:100%;padding:8px}.navbar-account-copy{flex:1}.navbar-account-menu{position:static;margin-top:6px;box-shadow:none}.navbar-auth-loading{width:100%}}
+
+/* A two-destination app does not need a drawer on a phone. Keep navigation
+   visible and reserve the compact account control for account actions. */
+.nav-label-mobile{display:none}
+@media(max-width:760px){
+  .navbar{min-height:60px;flex-wrap:nowrap;gap:6px}
+  .navbar-brand{flex:0 0 auto}
+  .navbar-brand img{width:24px;height:24px}
+  .navbar-nav{display:flex;width:auto;order:initial;margin-left:auto;padding:0;border:0;flex-direction:row;gap:2px}
+  .navbar-nav .nav-link{padding:8px 9px;font-size:.72rem;gap:4px}
+  .navbar-nav .nav-glyph{display:none}
+  .nav-label-desktop{display:none}
+  .nav-label-mobile{display:inline}
+  .navbar-actions{display:flex;width:auto;order:initial;padding:0;margin-left:0}
+  .navbar-actions .navbar-scope-pill,.navbar-actions .btn,.navbar-auth-loading{display:none}
+  .navbar-actions .navbar-account{width:auto}
+  .navbar-account-trigger{width:auto;padding:4px;border:0;background:transparent}
+  .navbar-account-copy,.navbar-account-chevron{display:none}
+  .navbar-account-menu{position:absolute;margin-top:6px;box-shadow:0 12px 28px rgba(17,29,19,.14)}
+  .navbar-auth-links{display:flex;flex-direction:row;gap:0}
+  .navbar-auth-links .btn{display:none}
+  .navbar-signin{font-size:.72rem;white-space:nowrap}
+}
 
 
 /* Persistent chat workspace */

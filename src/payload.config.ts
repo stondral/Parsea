@@ -11,6 +11,8 @@ import { Colleges } from './collections/Colleges'
 import { Branches } from './collections/Branches'
 import { Semesters } from './collections/Semesters'
 import { Subjects } from './collections/Subjects'
+import { Modules } from './collections/Modules'
+import { Topics } from './collections/Topics'
 import { Documents } from './collections/Documents'
 import { DocumentPages } from './collections/DocumentPages'
 import { Chunks } from './collections/Chunks'
@@ -26,7 +28,7 @@ export default buildConfig({
       baseDir: path.resolve(dirname),
     },
   },
-  collections: [Users, Media, Colleges, Branches, Semesters, Subjects, Documents, DocumentPages, Chunks, Conversations],
+  collections: [Users, Media, Colleges, Branches, Semesters, Subjects, Modules, Topics, Documents, DocumentPages, Chunks, Conversations],
   editor: lexicalEditor(),
   secret: process.env.PAYLOAD_SECRET || '',
   typescript: {

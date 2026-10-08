@@ -27,7 +27,7 @@ export function LMSNavbar({ onOpenUpload, branch = 'COMPS', semester = 3 }: LMSN
   useEffect(() => {
     let active = true
     fetch('/api/users/me', { credentials: 'include' })
-      .then((response) => response.ok ? response.json() : null)
+      .then((response) => (response.ok ? response.json() : null))
       .then((data) => {
         if (active) setCurrentUser(data?.user || null)
       })
@@ -37,7 +37,9 @@ export function LMSNavbar({ onOpenUpload, branch = 'COMPS', semester = 3 }: LMSN
       .finally(() => {
         if (active) setAuthChecked(true)
       })
-    return () => { active = false }
+    return () => {
+      active = false
+    }
   }, [])
 
   const handleLogout = async () => {
@@ -50,44 +52,72 @@ export function LMSNavbar({ onOpenUpload, branch = 'COMPS', semester = 3 }: LMSN
   }
 
   const isChat = pathname === '/chat'
-  const isNotes = pathname === '/notes' || pathname === '/'
+  const isNotes = pathname === '/notes'
+  const isHome = pathname === '/'
 
   return (
-    <nav className={`navbar${menuOpen ? ' menu-open' : ''}`}>
-
+    <nav className={`navbar${menuOpen ? ' menu-open' : ''}`} aria-label="Main navigation">
       {/* Brand */}
-      <Link href="/notes" className="navbar-brand" onClick={() => setMenuOpen(false)}>
-        <img
-          src="https://img.icons8.com/bubbles/100/learning.png"
-          alt="Parsea"
-          width={28}
-          height={28}
-          style={{ display: 'block', flexShrink: 0 }}
-        />
+      <Link href="/" className="navbar-brand" onClick={() => setMenuOpen(false)}>
+        <svg
+          width="34"
+          height="34"
+          viewBox="0 0 34 34"
+          fill="none"
+          className="navbar-brand-mark"
+          aria-hidden="true"
+          style={{ flexShrink: 0 }}
+        >
+          <rect x="1" y="1" width="32" height="32" rx="10" fill="currentColor" opacity=".09" />
+          <path
+            d="m17 6 3.2 7.8L28 17l-7.8 3.2L17 28l-3.2-7.8L6 17l7.8-3.2Z"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinejoin="round"
+          />
+          <circle cx="17" cy="17" r="2.3" fill="currentColor" />
+        </svg>
         <span className="navbar-logo-name">Parsea</span>
         <span className="navbar-badge">Academic Intelligence</span>
       </Link>
 
-      <button
-        type="button"
-        className="navbar-menu-toggle"
-        aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'}
-        aria-expanded={menuOpen}
-        onClick={() => setMenuOpen((open) => !open)}
-      >
-        <span />
-        <span />
-      </button>
-
       {/* Nav links */}
       <div className="navbar-nav">
-        <Link href="/notes" className={`nav-link${isNotes ? ' active' : ''}`} onClick={() => setMenuOpen(false)}>
-          <span className="nav-glyph" aria-hidden="true">N</span>
-          <span>Your Notes</span>
+        {isHome && (
+          <Link
+            href="/"
+            className="nav-link nav-home-link active"
+            aria-current="page"
+            onClick={() => setMenuOpen(false)}
+          >
+            Overview
+          </Link>
+        )}
+        <Link
+          href="/notes"
+          className={`nav-link${isNotes ? ' active' : ''}`}
+          onClick={() => setMenuOpen(false)}
+        >
+          <span className="nav-glyph" aria-hidden="true">
+            N
+          </span>
+          <span className="nav-label">
+            <span className="nav-label-desktop">{isHome ? 'Library' : 'Your Notes'}</span>
+            <span className="nav-label-mobile">{isHome ? 'Library' : 'Notes'}</span>
+          </span>
         </Link>
-        <Link href="/chat" className={`nav-link${isChat ? ' active' : ''}`} onClick={() => setMenuOpen(false)}>
-          <span className="nav-glyph" aria-hidden="true">AI</span>
-          <span>AI Assistant</span>
+        <Link
+          href="/chat"
+          className={`nav-link${isChat ? ' active' : ''}`}
+          onClick={() => setMenuOpen(false)}
+        >
+          <span className="nav-glyph" aria-hidden="true">
+            AI
+          </span>
+          <span className="nav-label">
+            <span className="nav-label-desktop">{isHome ? 'Study chat' : 'AI Assistant'}</span>
+            <span className="nav-label-mobile">{isHome ? 'Study chat' : 'Ask AI'}</span>
+          </span>
         </Link>
       </div>
 
@@ -99,11 +129,7 @@ export function LMSNavbar({ onOpenUpload, branch = 'COMPS', semester = 3 }: LMSN
         </span>
 
         {onOpenUpload && currentUser && (
-          <button
-            type="button"
-            onClick={onOpenUpload}
-            className="btn btn-primary btn-sm"
-          >
+          <button type="button" onClick={onOpenUpload} className="btn btn-primary btn-sm">
             Upload notes
           </button>
         )}
@@ -119,24 +145,47 @@ export function LMSNavbar({ onOpenUpload, branch = 'COMPS', semester = 3 }: LMSN
               aria-expanded={accountOpen}
               aria-haspopup="menu"
             >
-              <span className="navbar-account-avatar">{(currentUser.name || currentUser.email || 'S').charAt(0).toUpperCase()}</span>
+              <span className="navbar-account-avatar">
+                {(currentUser.name || currentUser.email || 'S').charAt(0).toUpperCase()}
+              </span>
               <span className="navbar-account-copy">
                 <strong>{currentUser.name || 'Student'}</strong>
-                <small>{currentUser.semester ? `Semester ${currentUser.semester}` : currentUser.email}</small>
+                <small>
+                  {currentUser.semester ? `Semester ${currentUser.semester}` : currentUser.email}
+                </small>
               </span>
               <span className="navbar-account-chevron">⌄</span>
             </button>
             {accountOpen && (
               <div className="navbar-account-menu" role="menu">
-                <Link href="/admin" target="_blank" onClick={() => { setAccountOpen(false); setMenuOpen(false) }}>Admin portal</Link>
-                <button type="button" onClick={handleLogout}>Sign out</button>
+                <Link
+                  href="/admin"
+                  target="_blank"
+                  onClick={() => {
+                    setAccountOpen(false)
+                    setMenuOpen(false)
+                  }}
+                >
+                  Admin portal
+                </Link>
+                <button type="button" onClick={handleLogout}>
+                  Sign out
+                </button>
               </div>
             )}
           </div>
         ) : (
           <div className="navbar-auth-links">
-            <Link href="/login" className="navbar-signin" onClick={() => setMenuOpen(false)}>Sign in</Link>
-            <Link href="/signup" className="btn btn-primary btn-sm" onClick={() => setMenuOpen(false)}>Create account</Link>
+            <Link href="/login" className="navbar-signin" onClick={() => setMenuOpen(false)}>
+              Sign in
+            </Link>
+            <Link
+              href="/signup"
+              className="btn btn-primary btn-sm"
+              onClick={() => setMenuOpen(false)}
+            >
+              {isHome ? 'Get started' : 'Create account'}
+            </Link>
           </div>
         )}
       </div>

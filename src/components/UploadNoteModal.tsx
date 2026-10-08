@@ -1,7 +1,8 @@
 'use client'
 
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { trpc } from '@/trpc/client'
+import { classifyDocumentFilename, type FilenameClassification } from '@/lib/documentClassification'
 
 interface UploadNoteModalProps {
   isOpen: boolean
@@ -9,11 +10,26 @@ interface UploadNoteModalProps {
   onSuccess?: () => void
 }
 
+function findLikelySubject(filename: string, subjects: Array<{ id: string | number; name: string }>) {
+  const normalizedFilename = filename.toLowerCase().replace(/[^a-z0-9]/g, '')
+  return subjects.find((subject) => {
+    const normalizedName = subject.name.toLowerCase().replace(/[^a-z0-9]/g, '')
+    const words = subject.name.toLowerCase().match(/[a-z]{4,}/g) || []
+    return (
+      (normalizedName.length > 3 && normalizedFilename.includes(normalizedName)) ||
+      (words.length > 0 && words.every((word) => filename.toLowerCase().includes(word)))
+    )
+  })
+}
+
 export function UploadNoteModal({ isOpen, onClose, onSuccess }: UploadNoteModalProps) {
   const [file, setFile] = useState<File | null>(null)
   const [name, setName] = useState('')
   const [chapter, setChapter] = useState('')
   const [subjectId, setSubjectId] = useState('')
+  const [moduleId, setModuleId] = useState('')
+  const [topicId, setTopicId] = useState('')
+  const [filenameInfo, setFilenameInfo] = useState<FilenameClassification | null>(null)
   const [type, setType] = useState<'Notes' | 'PYQs' | 'Assignments'>('Notes')
   const [isUploading, setIsUploading] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
@@ -24,6 +40,32 @@ export function UploadNoteModal({ isOpen, onClose, onSuccess }: UploadNoteModalP
     staleTime: 1000 * 60 * 60,
     gcTime: 1000 * 60 * 60,
   })
+  const modulesQuery = trpc.notes.getModules.useQuery(
+    { subjectId },
+    { enabled: Boolean(subjectId), staleTime: 1000 * 60 * 60 },
+  )
+  const topicsQuery = trpc.notes.getTopics.useQuery(
+    { moduleId },
+    { enabled: Boolean(moduleId), staleTime: 1000 * 60 * 60 },
+  )
+
+  useEffect(() => {
+    if (!file || subjectId || !subjectsQuery.data) return
+    const likelySubject = findLikelySubject(file.name, subjectsQuery.data)
+    if (likelySubject) setSubjectId(String(likelySubject.id))
+  }, [file, subjectId, subjectsQuery.data])
+
+  useEffect(() => {
+    if (!filenameInfo?.moduleNumber || moduleId || !modulesQuery.data) return
+    const matchingModule = modulesQuery.data.find((module) => module.number === filenameInfo.moduleNumber)
+    if (matchingModule) setModuleId(String(matchingModule.id))
+  }, [filenameInfo, moduleId, modulesQuery.data])
+
+  useEffect(() => {
+    if (!filenameInfo?.topicNumber || topicId || !topicsQuery.data) return
+    const matchingTopic = topicsQuery.data.find((topic) => topic.number === filenameInfo.topicNumber)
+    if (matchingTopic) setTopicId(String(matchingTopic.id))
+  }, [filenameInfo, topicId, topicsQuery.data])
 
   if (!isOpen) return null
 
@@ -36,9 +78,10 @@ export function UploadNoteModal({ isOpen, onClose, onSuccess }: UploadNoteModalP
       }
       setFile(selected)
       setErrorMsg(null)
+      const classification = classifyDocumentFilename(selected.name)
+      setFilenameInfo(classification)
       if (!name) {
-        const cleanName = selected.name.replace(/\.pdf$/i, '').replace(/[-_]+/g, ' ')
-        setName(cleanName)
+        setName(classification.title)
       }
     }
   }
@@ -59,6 +102,8 @@ export function UploadNoteModal({ isOpen, onClose, onSuccess }: UploadNoteModalP
       formData.append('chapter', chapter.trim())
       formData.append('type', type)
       if (subjectId) formData.append('subject', subjectId)
+      if (moduleId) formData.append('module', moduleId)
+      if (topicId) formData.append('topic', topicId)
 
       const res = await fetch('/api/notes/upload', { method: 'POST', body: formData })
       const data = await res.json()
@@ -67,12 +112,17 @@ export function UploadNoteModal({ isOpen, onClose, onSuccess }: UploadNoteModalP
       setSuccessMsg('Uploaded! Ingestion & pgvector indexing complete.')
       utils.notes.list.invalidate()
       utils.notes.getStats.invalidate()
+      utils.notes.getModules.invalidate()
+      utils.notes.getTopics.invalidate()
 
       setTimeout(() => {
         setIsUploading(false)
         setFile(null)
         setName('')
         setChapter('')
+        setModuleId('')
+        setTopicId('')
+        setFilenameInfo(null)
         setSuccessMsg(null)
         if (onSuccess) onSuccess()
         onClose()
@@ -137,6 +187,12 @@ export function UploadNoteModal({ isOpen, onClose, onSuccess }: UploadNoteModalP
                 </span>
               )}
             </div>
+            {filenameInfo?.moduleNumber && (
+              <p className="form-hint">
+                ✨ We found Module {filenameInfo.moduleNumber}
+                {filenameInfo.topicNumber ? ` · Topic ${filenameInfo.topicNumber}` : ''} in the filename. We’ll file it there automatically.
+              </p>
+            )}
           </div>
 
           {/* Document title */}
@@ -173,7 +229,7 @@ export function UploadNoteModal({ isOpen, onClose, onSuccess }: UploadNoteModalP
               <select
                 className="form-select"
                 value={subjectId}
-                onChange={(e) => setSubjectId(e.target.value)}
+                onChange={(e) => { setSubjectId(e.target.value); setModuleId(''); setTopicId('') }}
                 disabled={isUploading}
               >
                 <option value="">General / No subject</option>
@@ -196,6 +252,41 @@ export function UploadNoteModal({ isOpen, onClose, onSuccess }: UploadNoteModalP
                 <option value="Notes">Notes</option>
                 <option value="PYQs">PYQs (Past Papers)</option>
                 <option value="Assignments">Assignments</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="form-grid-2">
+            <div className="form-group">
+              <label className="form-label">Module <span className="form-label-optional">optional</span></label>
+              <select
+                className="form-select"
+                value={moduleId}
+                onChange={(e) => { setModuleId(e.target.value); setTopicId('') }}
+                disabled={isUploading || !subjectId}
+              >
+                <option value="">{subjectId ? 'No module — upload as general notes' : 'Choose a subject first'}</option>
+                {modulesQuery.data?.map((module) => (
+                  <option key={module.id} value={module.id}>
+                    Module {module.number}: {module.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Topic / submodule <span className="form-label-optional">optional</span></label>
+              <select
+                className="form-select"
+                value={topicId}
+                onChange={(e) => setTopicId(e.target.value)}
+                disabled={isUploading || !moduleId}
+              >
+                <option value="">{moduleId ? 'No submodule' : 'Choose a module first'}</option>
+                {topicsQuery.data?.map((topic) => (
+                  <option key={topic.id} value={topic.id}>
+                    {topic.number}: {topic.name}
+                  </option>
+                ))}
               </select>
             </div>
           </div>

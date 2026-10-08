@@ -73,6 +73,8 @@ export interface Config {
     branches: Branch;
     semesters: Semester;
     subjects: Subject;
+    modules: Module;
+    topics: Topic;
     documents: Document;
     document_pages: DocumentPage;
     chunks: Chunk;
@@ -90,6 +92,8 @@ export interface Config {
     branches: BranchesSelect<false> | BranchesSelect<true>;
     semesters: SemestersSelect<false> | SemestersSelect<true>;
     subjects: SubjectsSelect<false> | SubjectsSelect<true>;
+    modules: ModulesSelect<false> | ModulesSelect<true>;
+    topics: TopicsSelect<false> | TopicsSelect<true>;
     documents: DocumentsSelect<false> | DocumentsSelect<true>;
     document_pages: DocumentPagesSelect<false> | DocumentPagesSelect<true>;
     chunks: ChunksSelect<false> | ChunksSelect<true>;
@@ -232,6 +236,42 @@ export interface Subject {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "modules".
+ */
+export interface Module {
+  id: number;
+  /**
+   * e.g. 1, 2, 5
+   */
+  number: string;
+  /**
+   * e.g. Logic
+   */
+  name: string;
+  subject: number | Subject;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "topics".
+ */
+export interface Topic {
+  id: number;
+  /**
+   * e.g. 1.1, 1.2
+   */
+  number: string;
+  /**
+   * e.g. Propositions
+   */
+  name: string;
+  module: number | Module;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "documents".
  */
 export interface Document {
@@ -243,6 +283,14 @@ export interface Document {
   chapter?: string | null;
   type: 'Notes' | 'PYQs' | 'Assignments';
   subject: number | Subject;
+  /**
+   * Optional. Organizes many PDFs under a subject module.
+   */
+  module?: (number | null) | Module;
+  /**
+   * Optional. A finer section such as 1.1 or 1.2.
+   */
+  topic?: (number | null) | Topic;
   /**
    * Cloudflare R2 object key path, e.g. documents/comps/sem3/math/module-1.pdf
    */
@@ -286,6 +334,10 @@ export interface Chunk {
   text: string;
   chapter?: string | null;
   subjectName?: string | null;
+  moduleName?: string | null;
+  moduleNumber?: string | null;
+  topicName?: string | null;
+  topicNumber?: string | null;
   semester?: number | null;
   branch?: string | null;
   hasImage?: boolean | null;
@@ -364,6 +416,14 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'subjects';
         value: number | Subject;
+      } | null)
+    | ({
+        relationTo: 'modules';
+        value: number | Module;
+      } | null)
+    | ({
+        relationTo: 'topics';
+        value: number | Topic;
       } | null)
     | ({
         relationTo: 'documents';
@@ -511,6 +571,28 @@ export interface SubjectsSelect<T extends boolean = true> {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "modules_select".
+ */
+export interface ModulesSelect<T extends boolean = true> {
+  number?: T;
+  name?: T;
+  subject?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "topics_select".
+ */
+export interface TopicsSelect<T extends boolean = true> {
+  number?: T;
+  name?: T;
+  module?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "documents_select".
  */
 export interface DocumentsSelect<T extends boolean = true> {
@@ -518,6 +600,8 @@ export interface DocumentsSelect<T extends boolean = true> {
   chapter?: T;
   type?: T;
   subject?: T;
+  module?: T;
+  topic?: T;
   storageKey?: T;
   r2Bucket?: T;
   updatedAt?: T;
@@ -553,6 +637,10 @@ export interface ChunksSelect<T extends boolean = true> {
   text?: T;
   chapter?: T;
   subjectName?: T;
+  moduleName?: T;
+  moduleNumber?: T;
+  topicName?: T;
+  topicNumber?: T;
   semester?: T;
   branch?: T;
   hasImage?: T;

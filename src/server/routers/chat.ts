@@ -22,6 +22,8 @@ export const chatRouter = router({
             branch: z.string().optional(),
             semester: z.number().optional(),
             subject: z.string().optional(),
+            module: z.string().optional(),
+            topic: z.string().optional(),
           })
           .optional(),
       })

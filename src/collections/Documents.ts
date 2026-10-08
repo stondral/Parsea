@@ -43,6 +43,22 @@ export const Documents: CollectionConfig = {
       required: true,
     },
     {
+      name: 'module',
+      type: 'relationship',
+      relationTo: 'modules',
+      admin: {
+        description: 'Optional. Organizes many PDFs under a subject module.',
+      },
+    },
+    {
+      name: 'topic',
+      type: 'relationship',
+      relationTo: 'topics',
+      admin: {
+        description: 'Optional. A finer section such as 1.1 or 1.2.',
+      },
+    },
+    {
       name: 'storageKey',
       type: 'text',
       admin: {

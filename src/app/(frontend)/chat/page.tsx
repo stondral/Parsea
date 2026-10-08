@@ -50,17 +50,31 @@ interface ChatMessageItem {
   timestamp: number
 }
 
+const GUEST_CONVERSATIONS_KEY = 'parsea_guest_conversations'
+const GUEST_ACTIVE_CONVERSATION_KEY = 'parsea_guest_active_conversation_id'
+const MAX_GUEST_CONVERSATIONS = 40
+
+function readGuestConversations(): ConversationSummary[] {
+  try {
+    const value = localStorage.getItem(GUEST_CONVERSATIONS_KEY)
+    const conversations = value ? JSON.parse(value) : []
+    return Array.isArray(conversations) ? conversations : []
+  } catch {
+    return []
+  }
+}
+
 function normalizeMath(text: string): string {
   if (!text) return ''
   return (
     text
-      // \[ ... \] ΓåÆ $$ ... $$ (display math)
+      // \[ ... \] → $$ ... $$ (display math)
       .replace(/\\\[([^]*?)\\\]/g, (_, m) => `$$${m}$$`)
-      // \( ... \) ΓåÆ $ ... $ (inline math)
+      // \( ... \) → $ ... $ (inline math)
       .replace(/\\\(([^]*?)\\\)/g, (_, m) => `$${m}$`)
-      // Unicode floor/ceiling brackets ΓåÆ LaTeX
-      .replace(/Γîè([^Γîï]+)Γîï/g, (_, m) => `$\\lfloor ${m} \\rfloor$`)
-      .replace(/Γîê([^Γîë]+)Γîë/g, (_, m) => `$\\lceil ${m} \\rceil$`)
+      // Unicode floor/ceiling brackets → LaTeX
+      .replace(/⌊([^⌋]+)⌋/g, (_, m) => `$\\lfloor ${m} \\rfloor$`)
+      .replace(/⌈([^⌉]+)⌉/g, (_, m) => `$\\lceil ${m} \\rceil$`)
   )
 }
 
@@ -83,7 +97,7 @@ const VOICE_OPTIONS = [
 const LANG_OPTIONS: { id: 'auto' | 'en' | 'hi'; label: string; shortLabel: string }[] = [
   { id: 'auto', label: 'Auto Detect (Matches input language)', shortLabel: 'Lang: Auto' },
   { id: 'en', label: 'English (EN) - Forces English response', shortLabel: 'EN' },
-  { id: 'hi', label: 'αñ╣αñ┐αñ¿αÑìαñªαÑÇ (HI) - Forces Hindi response', shortLabel: 'HI' },
+  { id: 'hi', label: 'Hindi (HI) - Forces Hindi response', shortLabel: 'HI' },
 ]
 
 const STARTERS = [
@@ -123,6 +137,7 @@ export default function ChatPage() {
   const [outputLanguage, setOutputLanguage] = useState<'auto' | 'en' | 'hi'>('auto')
   const [selectedVoice, setSelectedVoice] = useState<string>('auto')
   const [autoSpeak, setAutoSpeak] = useState<boolean>(true)
+  const [conversationMode, setConversationMode] = useState<boolean>(false)
   const [isAudioQueuePlaying, setIsAudioQueuePlaying] = useState<boolean>(false)
   const [isRecording, setIsRecording] = useState(false)
   const [isTranscribing, setIsTranscribing] = useState(false)
@@ -134,6 +149,11 @@ export default function ChatPage() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
   const audioElementRef = useRef<HTMLAudioElement | null>(null)
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const voiceActivityFrameRef = useRef<number | null>(null)
+  const silenceStartedAtRef = useRef<number | null>(null)
+  const heardSpeechRef = useRef(false)
+  const conversationModeRef = useRef(false)
 
   // Audio Queue & Sentence Buffer Refs
   const audioQueueRef = useRef<string[]>([])
@@ -152,6 +172,9 @@ export default function ChatPage() {
 
     const savedAuto = localStorage.getItem('parsea_auto_speak')
     if (savedAuto !== null) setAutoSpeak(savedAuto === 'true')
+
+    const savedConversationMode = localStorage.getItem('parsea_conversation_mode')
+    if (savedConversationMode !== null) setConversationMode(savedConversationMode === 'true')
 
     const savedMode = localStorage.getItem('parsea_mode') as 'quick' | 'deep' | null
     if (savedMode === 'quick' || savedMode === 'deep') setChatMode(savedMode)
@@ -182,6 +205,11 @@ export default function ChatPage() {
     autoSpeakRef.current = autoSpeak
     localStorage.setItem('parsea_auto_speak', String(autoSpeak))
   }, [autoSpeak])
+
+  useEffect(() => {
+    conversationModeRef.current = conversationMode
+    localStorage.setItem('parsea_conversation_mode', String(conversationMode))
+  }, [conversationMode])
 
   useEffect(() => {
     selectedVoiceRef.current = selectedVoice
@@ -288,18 +316,70 @@ export default function ChatPage() {
     stopAllAudio()
 
     setIsStreaming(false)
-    setIsRecording(false)
+    stopRecording()
 
     setTimeout(() => {
       inputRef.current?.focus()
     }, 50)
   }
 
-  // Mic Recording (MediaRecorder STT)
+  const stopVoiceActivityDetection = () => {
+    if (voiceActivityFrameRef.current !== null) {
+      cancelAnimationFrame(voiceActivityFrameRef.current)
+      voiceActivityFrameRef.current = null
+    }
+    audioContextRef.current?.close().catch(() => undefined)
+    audioContextRef.current = null
+    silenceStartedAtRef.current = null
+  }
+
+  // Browser-side voice activity detection ends an utterance after 1.2 seconds
+  // of quiet. Whisper then performs the actual speech-to-text transcription.
+  const startVoiceActivityDetection = (stream: MediaStream) => {
+    const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!AudioContextClass) return
+
+    const context = new AudioContextClass()
+    const analyser = context.createAnalyser()
+    analyser.fftSize = 512
+    context.createMediaStreamSource(stream).connect(analyser)
+    const samples = new Uint8Array(analyser.fftSize)
+    const silenceMs = 1200
+    const speechThreshold = 12
+    heardSpeechRef.current = false
+
+    const monitor = () => {
+      if (!mediaRecorderRef.current || mediaRecorderRef.current.state !== 'recording') return
+      analyser.getByteTimeDomainData(samples)
+      let energy = 0
+      for (const sample of samples) energy += Math.abs(sample - 128)
+      const volume = energy / samples.length
+      const now = performance.now()
+
+      if (volume >= speechThreshold) {
+        heardSpeechRef.current = true
+        silenceStartedAtRef.current = null
+      } else if (heardSpeechRef.current) {
+        silenceStartedAtRef.current ??= now
+        if (now - silenceStartedAtRef.current >= silenceMs) {
+          stopRecording()
+          return
+        }
+      }
+      voiceActivityFrameRef.current = requestAnimationFrame(monitor)
+    }
+
+    audioContextRef.current = context
+    monitor()
+  }
+
+  // Mic Recording (MediaRecorder STT + automatic end-of-speech detection)
   const startRecording = async () => {
     setVoiceError(null)
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      })
       const options =
         typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/webm')
           ? { mimeType: 'audio/webm' }
@@ -314,6 +394,7 @@ export default function ChatPage() {
       }
 
       mediaRecorderRef.current.onstop = async () => {
+        stopVoiceActivityDetection()
         stream.getTracks().forEach((track) => track.stop())
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
 
@@ -327,6 +408,7 @@ export default function ChatPage() {
 
       mediaRecorderRef.current.start()
       setIsRecording(true)
+      startVoiceActivityDetection(stream)
     } catch (err: any) {
       console.error('Microphone error:', err)
       setVoiceError('Could not access microphone. Please check permissions.')
@@ -334,7 +416,8 @@ export default function ChatPage() {
   }
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
+    if (mediaRecorderRef.current?.state === 'recording') {
+      stopVoiceActivityDetection()
       mediaRecorderRef.current.stop()
       setIsRecording(false)
     }
@@ -370,7 +453,13 @@ export default function ChatPage() {
         return
       }
 
-      setInputQuestion(data.text.trim())
+      const transcript = data.text.trim()
+      setInputQuestion(transcript)
+      // Conversation mode sends the utterance to the RAG chat immediately. The
+      // existing message history doubles as a readable, saved transcript.
+      if (conversationModeRef.current) {
+        await handleSendQuery(transcript)
+      }
     } catch (err: any) {
       console.error('STT Error:', err)
       setVoiceError(err?.message || 'Error processing speech transcription')
@@ -462,9 +551,18 @@ export default function ChatPage() {
         const user = meData?.user ? { id: meData.user.id, name: meData.user.name, email: meData.user.email } : null
         setChatUser(user)
         if (!user) {
-          const savedId = sessionStorage.getItem('parsea_conversation_id')
-          if (savedId) setConversationId(savedId)
-          else setConversationId(crypto.randomUUID())
+          const guestConversations = readGuestConversations()
+          const savedId = localStorage.getItem(GUEST_ACTIVE_CONVERSATION_KEY)
+          setConversations(guestConversations)
+          if (savedId) {
+            const saved = guestConversations.find((item) => String(item.id) === savedId)
+            if (saved) {
+              setConversationId(savedId)
+              setMessages(saved.messages || [])
+            } else {
+              setConversationId(crypto.randomUUID())
+            }
+          } else setConversationId(crypto.randomUUID())
           return
         }
         const historyResponse = await fetch('/api/conversations', { credentials: 'include' })
@@ -498,10 +596,40 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, isStreaming])
 
+  useEffect(() => () => stopVoiceActivityDetection(), [])
+
+  const saveGuestConversation = (id: string, nextMessages: ChatMessageItem[]) => {
+    if (chatUser || !id || nextMessages.length === 0) return
+    const title = nextMessages.find((message) => message.role === 'user')?.content.slice(0, 80) || 'New conversation'
+    const conversation: ConversationSummary = {
+      id,
+      title,
+      messages: nextMessages,
+      lastMessageAt: new Date().toISOString(),
+    }
+    const updated = [conversation, ...readGuestConversations().filter((item) => String(item.id) !== id)].slice(0, MAX_GUEST_CONVERSATIONS)
+    try {
+      localStorage.setItem(GUEST_CONVERSATIONS_KEY, JSON.stringify(updated))
+      localStorage.setItem(GUEST_ACTIVE_CONVERSATION_KEY, id)
+      setConversations(updated)
+    } catch {
+      // Private-mode or quota failures should not interrupt chat.
+    }
+  }
+
+  useEffect(() => {
+    if (!chatUser && conversationId && messages.length > 0) {
+      saveGuestConversation(conversationId, messages)
+    }
+  }, [chatUser, conversationId, messages])
+
   const handleStartNewChat = () => {
     handleStopSpeakingAndGeneration()
-    sessionStorage.removeItem('parsea_conversation_id')
-    setConversationId('')
+    saveGuestConversation(conversationId, messages)
+    const nextId = crypto.randomUUID()
+    if (!chatUser) localStorage.setItem(GUEST_ACTIVE_CONVERSATION_KEY, nextId)
+    else sessionStorage.removeItem('parsea_conversation_id')
+    setConversationId(nextId)
     setMessages([])
     setInputQuestion('')
     setHistoryOpen(false)
@@ -509,6 +637,16 @@ export default function ChatPage() {
 
   const handleLoadConversation = async (id: string | number) => {
     if (isStreaming) return
+    if (!chatUser) {
+      const conversation = readGuestConversations().find((item) => String(item.id) === String(id))
+      if (!conversation) return
+      saveGuestConversation(conversationId, messages)
+      setConversationId(String(conversation.id))
+      localStorage.setItem(GUEST_ACTIVE_CONVERSATION_KEY, String(conversation.id))
+      setMessages(conversation.messages || [])
+      setHistoryOpen(false)
+      return
+    }
     const response = await fetch(`/api/conversations/${id}`, { credentials: 'include' })
     if (!response.ok) return
     const data = await response.json()
@@ -520,6 +658,13 @@ export default function ChatPage() {
   }
 
   const handleDeleteConversation = async (id: string | number) => {
+    if (!chatUser) {
+      const updated = readGuestConversations().filter((item) => String(item.id) !== String(id))
+      localStorage.setItem(GUEST_CONVERSATIONS_KEY, JSON.stringify(updated))
+      setConversations(updated)
+      if (String(id) === conversationId) handleStartNewChat()
+      return
+    }
     const response = await fetch(`/api/conversations/${id}`, { method: 'DELETE', credentials: 'include' })
     if (!response.ok) return
     setConversations((items) => items.filter((item) => String(item.id) !== String(id)))
@@ -639,7 +784,7 @@ export default function ChatPage() {
 
             if (autoSpeakRef.current) {
               sentenceBufferRef.current += chunk
-              const sentenceEndRegex = /([.?!αÑñ\n]+)/
+              const sentenceEndRegex = /([.?!।\n]+)/
               const parts = sentenceBufferRef.current.split(sentenceEndRegex)
 
               if (parts.length > 2) {
@@ -741,7 +886,7 @@ export default function ChatPage() {
 
             if (autoSpeakRef.current) {
               sentenceBufferRef.current += token
-              const sentenceEndRegex = /([.?!αÑñ\n]+)/
+              const sentenceEndRegex = /([.?!।\n]+)/
               const parts = sentenceBufferRef.current.split(sentenceEndRegex)
 
               if (parts.length > 2) {
@@ -842,8 +987,7 @@ export default function ChatPage() {
           <button type="button" className="chat-new-button" onClick={handleStartNewChat}>
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="6" y1="1" x2="6" y2="11"/><line x1="1" y1="6" x2="11" y2="6"/></svg> New chat
           </button>
-          {chatUser ? (
-            <div className="chat-history-list">
+          <div className="chat-history-list">
               <span className="chat-history-label">Recent</span>
               {historyLoading ? <p className="chat-history-empty">Loading history...</p> : conversations.length === 0 ? <p className="chat-history-empty">Your saved conversations will appear here.</p> : conversations.map((conversation) => (
                 <div key={conversation.id} className={`chat-history-item${String(conversation.id) === conversationId ? ' active' : ''}`}>
@@ -858,13 +1002,13 @@ export default function ChatPage() {
                   </button>
                 </div>
               ))}
-            </div>
-          ) : (
+          {!chatUser && (
             <div className="chat-history-signin">
-              <p>Sign in to save conversations and continue them on another device.</p>
+              <p>Saved on this device. Sign in to continue them on another device.</p>
               <a href="/login">Sign in</a>
             </div>
           )}
+          </div>
         </aside>
         {historyOpen && <button type="button" className="chat-sidebar-backdrop" onClick={() => setHistoryOpen(false)} aria-label="Close chat history" />}
         <div className="chat-main">
@@ -883,7 +1027,7 @@ export default function ChatPage() {
           >
             <span aria-hidden="true">{showFilters ? '▲' : '▼'}</span>
             <span>
-              Scope: {branch} ┬╖ Sem {semester || '?'} ┬╖ {subject || 'All Subjects'}
+              Scope: {branch} · Sem {semester || '?'} · {subject || 'All Subjects'}
             </span>
           </button>
 
@@ -1096,7 +1240,7 @@ export default function ChatPage() {
                                 <div className="chat-source-info">
                                   <span className="chat-source-name">{s.document}</span>
                                   <span className="chat-source-detail">
-                                    {s.chapter ? `${s.chapter} ┬╖ ` : ''}
+                                    {s.chapter ? `${s.chapter} · ` : ''}
                                     <span className="chat-source-page">Page {s.page}</span>
                                   </span>
                                 </div>
@@ -1114,7 +1258,7 @@ export default function ChatPage() {
                               <div className="chat-source-info">
                                 <span className="chat-source-name">{s.document}</span>
                                 <span className="chat-source-detail">
-                                  {s.chapter ? `${s.chapter} ┬╖ ` : ''}
+                                  {s.chapter ? `${s.chapter} · ` : ''}
                                   <span className="chat-source-page">Page {s.page}</span>
                                 </span>
                               </div>
@@ -1126,7 +1270,7 @@ export default function ChatPage() {
                                   className="btn btn-primary btn-sm"
                                   style={{ flexShrink: 0 }}
                                 >
-                                  PDF Γåù
+                                  Open PDF
                                 </a>
                               )}
                             </div>
@@ -1214,8 +1358,8 @@ export default function ChatPage() {
             }}
             placeholder={
               messages.length === 0
-                ? "Ask anything ΓÇö e.g. 'explain pigeonhole principle with diagrams'ΓÇª"
-                : "Ask a follow-upΓÇª"
+                ? "Ask anything — e.g. 'explain pigeonhole principle with diagrams'…"
+                : "Ask a follow-up…"
             }
             disabled={isTranscribing}
             style={{
@@ -1515,6 +1659,15 @@ export default function ChatPage() {
                         {autoSpeak ? 'ON' : 'OFF'}
                       </span>
                     </div>
+                    <div
+                      onClick={() => setConversationMode(!conversationMode)}
+                      style={{ marginTop: 6, padding: '6px 8px', borderRadius: 6, fontSize: '0.78rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#f9f9f9' }}
+                    >
+                      <span style={{ fontWeight: 600, color: '#333' }}>Conversation mode (auto-send)</span>
+                      <span style={{ color: conversationMode ? '#2e7d32' : '#999', fontWeight: 700 }}>
+                        {conversationMode ? 'ON' : 'OFF'}
+                      </span>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1573,7 +1726,7 @@ export default function ChatPage() {
                 type="button"
                 onClick={toggleRecording}
                 disabled={isPending || isTranscribing}
-                title={isRecording ? 'Stop Recording' : 'Voice Input (Whisper STT)'}
+                title={isRecording ? 'Listening — stops after you pause' : conversationMode ? 'Start hands-free conversation with your notes' : 'Voice input — stops after you pause'}
                 className={`h-7 w-7 rounded-full flex items-center justify-center transition-all ${
                   isRecording ? 'bg-red-500/10 text-red-500 animate-pulse' : ''
                 }`}

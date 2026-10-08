@@ -78,6 +78,10 @@ export const processDocument: CollectionAfterChangeHook = async ({
         let subjectName = ''
         let semesterNumber: number | null = null
         let branchName = ''
+        let moduleName = ''
+        let moduleNumber = ''
+        let topicName = ''
+        let topicNumber = ''
         const chapter = doc.chapter || doc.name || 'Chapter'
 
         try {
@@ -100,13 +104,34 @@ export const processDocument: CollectionAfterChangeHook = async ({
           req.payload.logger.warn(`Could not resolve full hierarchy for doc ${doc.id}: ${metaErr}`)
         }
 
+        try {
+          const moduleId = typeof doc.module === 'object' ? doc.module?.id : doc.module
+          if (moduleId) {
+            const moduleDoc = await req.payload.findByID({ collection: 'modules', id: moduleId, depth: 0 })
+            moduleName = moduleDoc?.name || ''
+            moduleNumber = moduleDoc?.number || ''
+          }
+          const topicId = typeof doc.topic === 'object' ? doc.topic?.id : doc.topic
+          if (topicId) {
+            const topicDoc = await req.payload.findByID({ collection: 'topics', id: topicId, depth: 0 })
+            topicName = topicDoc?.name || ''
+            topicNumber = topicDoc?.number || ''
+          }
+        } catch (metaErr) {
+          req.payload.logger.warn(`Could not resolve module hierarchy for doc ${doc.id}: ${metaErr}`)
+        }
+
         // ─────────────────────────────────────────────────────────
         // 1. CLOUDFLARE R2 UPLOAD (PDF Document)
         // ─────────────────────────────────────────────────────────
         const branchSlug = slugify(branchName || 'general')
         const semSlug = semesterNumber ? `sem${semesterNumber}` : 'general'
         const subjectSlug = slugify(subjectName || 'notes')
-        const r2PdfKey = `documents/${branchSlug}/${semSlug}/${subjectSlug}/${doc.filename}`
+        const moduleSlug = moduleNumber ? `module-${slugify(moduleNumber)}-${slugify(moduleName || 'notes')}` : 'general'
+        const topicSlug = topicNumber ? `topic-${slugify(topicNumber)}-${slugify(topicName || 'notes')}` : 'general'
+        const documentSlug = slugify(doc.filename.replace(/\.pdf$/i, '')) || `document-${doc.id}`
+        const r2Folder = `documents/${branchSlug}/${semSlug}/${subjectSlug}/${moduleSlug}/${topicSlug}/${documentSlug}`
+        const r2PdfKey = `${r2Folder}/${doc.filename}`
 
         try {
           req.payload.logger.info(`Uploading document ${doc.id} to Cloudflare R2: ${r2PdfKey}`)
@@ -164,7 +189,7 @@ export const processDocument: CollectionAfterChangeHook = async ({
                 const shotRes = await parser.getScreenshot({ pageNumber: pageNum } as any)
                 const pData = shotRes.pages.find((p: any) => p.pageNumber === pageNum)
                 if (pData && pData.data) {
-                  const imgKey = `documents/${branchSlug}/${semSlug}/${subjectSlug}/media/page_${pageNum}.png`
+                  const imgKey = `${r2Folder}/media/page_${pageNum}.png`
                   await uploadToR2({
                     buffer: Buffer.from(pData.data),
                     key: imgKey,
@@ -308,6 +333,10 @@ export const processDocument: CollectionAfterChangeHook = async ({
                 text: item.text,
                 chapter,
                 subjectName,
+                moduleName,
+                moduleNumber,
+                topicName,
+                topicNumber,
                 semester: semesterNumber,
                 branch: branchName,
                 hasImage: item.hasImage,

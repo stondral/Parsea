@@ -14,6 +14,12 @@ export interface NoteItem {
   storageKey?: string
   subjectId?: string | number
   subjectName: string
+  moduleId?: string | number
+  moduleName?: string
+  moduleNumber?: string
+  topicId?: string | number
+  topicName?: string
+  topicNumber?: string
   semesterNumber?: number | null
   branchName?: string
   createdAt: string
@@ -77,7 +83,7 @@ export const notesRouter = router({
 
           const res = await payload.find({
             collection: 'documents',
-            depth: 2,
+            depth: 3,
             limit: 100,
             sort: '-createdAt',
             where: Object.keys(whereClause).length > 0 ? whereClause : undefined,
@@ -116,7 +122,7 @@ export const notesRouter = router({
             })
           }
 
-          return docs.map((d: any): NoteItem => ({
+          const notes = docs.map((d: any): NoteItem => ({
             id: d.id,
             name: d.name,
             chapter: d.chapter || '',
@@ -126,6 +132,12 @@ export const notesRouter = router({
             storageKey: d.storageKey,
             subjectId: typeof d.subject === 'object' ? d.subject?.id : d.subject,
             subjectName: typeof d.subject === 'object' ? d.subject?.name : 'General Studies',
+            moduleId: typeof d.module === 'object' ? d.module?.id : d.module,
+            moduleName: typeof d.module === 'object' ? d.module?.name : '',
+            moduleNumber: typeof d.module === 'object' ? d.module?.number : '',
+            topicId: typeof d.topic === 'object' ? d.topic?.id : d.topic,
+            topicName: typeof d.topic === 'object' ? d.topic?.name : '',
+            topicNumber: typeof d.topic === 'object' ? d.topic?.number : '',
             semesterNumber:
               typeof d.subject === 'object' && typeof d.subject?.semester === 'object'
                 ? d.subject?.semester?.number
@@ -138,6 +150,14 @@ export const notesRouter = router({
                 : '',
             createdAt: d.createdAt,
           }))
+
+          // Keep the library predictable: subject → module → topic → newest file.
+          return notes.sort((a, b) =>
+            a.subjectName.localeCompare(b.subjectName) ||
+            (a.moduleNumber || '∞').localeCompare(b.moduleNumber || '∞', undefined, { numeric: true }) ||
+            (a.topicNumber || '∞').localeCompare(b.topicNumber || '∞', undefined, { numeric: true }) ||
+            b.createdAt.localeCompare(a.createdAt)
+          )
         },
         30,
       )
@@ -160,11 +180,34 @@ export const notesRouter = router({
         cacheKey,
         async () => {
           const payload = await getAppPayload()
+          // Resolve the small parent set first. This keeps the database query scoped
+          // to the chosen semester instead of hydrating every subject and filtering
+          // it in Node after the fact.
+          const semesters = await payload.find({
+            collection: 'semesters',
+            depth: input?.branch?.trim() ? 1 : 0,
+            limit: 100,
+            pagination: false,
+            where: input?.semester ? { number: { equals: input.semester } } : undefined,
+          })
+
+          const matchingSemesterIds = semesters.docs
+            .filter((semester: any) => {
+              if (!input?.branch?.trim()) return true
+              const branchName = typeof semester.branch === 'object' ? semester.branch?.name : ''
+              return branchName?.toLowerCase().includes(input.branch.trim().toLowerCase())
+            })
+            .map((semester: any) => semester.id)
+
+          if (matchingSemesterIds.length === 0) return []
+
           const res = await payload.find({
             collection: 'subjects',
             depth: 1,
             limit: 100,
+            pagination: false,
             sort: 'name',
+            where: { semester: { in: matchingSemesterIds } },
             select: {
               name: true,
               code: true,
@@ -172,16 +215,7 @@ export const notesRouter = router({
             },
           })
 
-          let subs = res.docs
-
-          if (input?.semester) {
-            subs = subs.filter((s: any) => {
-              const sem = typeof s.semester === 'object' ? s.semester?.number : null
-              return sem === input.semester
-            })
-          }
-
-          return subs.map((s: any) => ({
+          return res.docs.map((s: any) => ({
             id: s.id,
             name: s.name,
             code: s.code || '',
@@ -195,6 +229,64 @@ export const notesRouter = router({
         60 * 60,
       )
 
+      return result.data
+    }),
+
+  getModules: publicProcedure
+    .input(z.object({ subjectId: z.union([z.string(), z.number()]) }))
+    .query(async ({ input }) => {
+      const subjectId = Number(input.subjectId)
+      if (!Number.isFinite(subjectId) || subjectId <= 0) return []
+
+      const result = await getOrSetCache(
+        hashKey('parsea:notes:modules', String(subjectId)),
+        async () => {
+          const payload = await getAppPayload()
+          const modules = await payload.find({
+            collection: 'modules',
+            depth: 0,
+            limit: 100,
+            pagination: false,
+            sort: 'number',
+            where: { subject: { equals: subjectId } },
+          })
+          return modules.docs.map((module: any) => ({
+            id: module.id,
+            number: module.number,
+            name: module.name,
+          }))
+        },
+        60 * 60,
+      )
+      return result.data
+    }),
+
+  getTopics: publicProcedure
+    .input(z.object({ moduleId: z.union([z.string(), z.number()]) }))
+    .query(async ({ input }) => {
+      const moduleId = Number(input.moduleId)
+      if (!Number.isFinite(moduleId) || moduleId <= 0) return []
+
+      const result = await getOrSetCache(
+        hashKey('parsea:notes:topics', String(moduleId)),
+        async () => {
+          const payload = await getAppPayload()
+          const topics = await payload.find({
+            collection: 'topics',
+            depth: 0,
+            limit: 100,
+            pagination: false,
+            sort: 'number',
+            where: { module: { equals: moduleId } },
+          })
+          return topics.docs.map((topic: any) => ({
+            id: topic.id,
+            number: topic.number,
+            name: topic.name,
+          }))
+        },
+        60 * 60,
+      )
       return result.data
     }),
 

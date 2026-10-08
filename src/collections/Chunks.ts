@@ -31,6 +31,22 @@ export const Chunks: CollectionConfig = {
       type: 'text',
     },
     {
+      name: 'moduleName',
+      type: 'text',
+    },
+    {
+      name: 'moduleNumber',
+      type: 'text',
+    },
+    {
+      name: 'topicName',
+      type: 'text',
+    },
+    {
+      name: 'topicNumber',
+      type: 'text',
+    },
+    {
       name: 'semester',
       type: 'number',
     },

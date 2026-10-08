@@ -74,13 +74,13 @@ Never return false citations to students:
 
 ### Rule 6: Cloudflare R2 for Binary PDF Storage & Presigned Streaming
 * Binary PDF files are uploaded to **Cloudflare R2** with hierarchical keys:
-  `documents/{branch}/{semester}/{subject}/{filename}`
+  `documents/{branch}/{semester}/{subject}/{module}/{topic}/{document}/{filename}`
 * Payload CMS stores document metadata, `storageKey`, and `r2Bucket`.
 * PDF viewers and download links must stream directly from Cloudflare R2 using `getPresignedDownloadUrl(storageKey)`. Never route large PDF streams through Next.js/Payload server processes.
 
 ### Rule 7: Metadata Pre-Filtering Before Retrieval
 * Academic college scale involves hundreds of thousands of chunks across multiple departments.
-* When `branch`, `semester`, or `subject` are provided, query filters MUST be applied in SQL before vector HNSW distance and GIN full-text calculations to isolate the search space.
+* When `branch`, `semester`, `subject`, `module`, or `topic` are provided, query filters MUST be applied in SQL before vector HNSW distance and GIN full-text calculations to isolate the search space.
 
 ### Rule 8: Batch Embedding Generation in Ingestion
 * Never process embeddings sequentially 1-by-1 in loops (`PDF -> page 1 -> embedding -> page 2...`).
@@ -113,6 +113,8 @@ parsea/src/
 │   ├── Branches.ts            # Branch level (relates to College)
 │   ├── Semesters.ts           # Semester level (relates to Branch)
 │   ├── Subjects.ts            # Subject level (relates to Semester)
+│   ├── Modules.ts             # Module level (relates to Subject)
+│   ├── Topics.ts              # Optional 1.1 / 1.2 level (relates to Module)
 │   ├── Documents.ts           # Uploaded PDFs (relates to Subject, tracks storageKey & r2Bucket)
 │   ├── DocumentPages.ts       # Extracted page text (relates to Document)
 │   └── Chunks.ts              # Text chunks + pgvector vector(384) embeddings + academic tags

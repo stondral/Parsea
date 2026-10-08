@@ -11,6 +11,8 @@ export interface AcademicFilters {
   branch?: string
   semester?: number
   subject?: string
+  module?: string
+  topic?: string
 }
 
 export interface SourceCitation {
@@ -353,12 +355,16 @@ Use the study material context as supporting evidence when it is present and rel
       const filterBranch = filters?.branch?.trim()
       const filterSemester = filters?.semester
       const filterSubject = filters?.subject?.trim()
+      const filterModule = filters?.module?.trim()
+      const filterTopic = filters?.topic?.trim()
 
       const branchClause = filterBranch ? sql`AND LOWER(c.branch) = LOWER(${filterBranch})` : sql``
       const semesterClause = filterSemester ? sql`AND c.semester = ${filterSemester}` : sql``
       const subjectClause = filterSubject
         ? sql`AND (LOWER(c.subject_name) LIKE LOWER(${`%${filterSubject}%`}) OR LOWER(d.name) LIKE LOWER(${`%${filterSubject}%`}))`
         : sql``
+      const moduleClause = filterModule ? sql`AND LOWER(c.module_name) LIKE LOWER(${`%${filterModule}%`})` : sql``
+      const topicClause = filterTopic ? sql`AND LOWER(c.topic_name) LIKE LOWER(${`%${filterTopic}%`})` : sql``
 
       // ─────────────────────────────────────────────────────────
       // HYBRID RETRIEVAL STEP 1 & 2: Vector Search (HNSW) + Keyword Search (GIN) in parallel
@@ -375,6 +381,8 @@ Use the study material context as supporting evidence when it is present and rel
         ${branchClause}
         ${semesterClause}
         ${subjectClause}
+        ${moduleClause}
+        ${topicClause}
         ORDER BY c.embedding <=> ${vectorStr}::vector
         LIMIT 25
       `)
@@ -393,6 +401,8 @@ Use the study material context as supporting evidence when it is present and rel
           ${branchClause}
           ${semesterClause}
           ${subjectClause}
+          ${moduleClause}
+          ${topicClause}
           ORDER BY ts_rank(to_tsvector('english', c.text), plainto_tsquery('english', ${cleanKeywords})) DESC
           LIMIT 25
         `)
@@ -843,12 +853,16 @@ Use the study material context as supporting evidence when it is present and rel
   const filterBranch = filters?.branch?.trim()
   const filterSemester = filters?.semester
   const filterSubject = filters?.subject?.trim()
+  const filterModule = filters?.module?.trim()
+  const filterTopic = filters?.topic?.trim()
 
   const branchClause = filterBranch ? sql`AND LOWER(c.branch) = LOWER(${filterBranch})` : sql``
   const semesterClause = filterSemester ? sql`AND c.semester = ${filterSemester}` : sql``
   const subjectClause = filterSubject
     ? sql`AND (LOWER(c.subject_name) LIKE LOWER(${`%${filterSubject}%`}) OR LOWER(d.name) LIKE LOWER(${`%${filterSubject}%`}))`
     : sql``
+  const moduleClause = filterModule ? sql`AND LOWER(c.module_name) LIKE LOWER(${`%${filterModule}%`})` : sql``
+  const topicClause = filterTopic ? sql`AND LOWER(c.topic_name) LIKE LOWER(${`%${filterTopic}%`})` : sql``
 
   // 4. Parallel Vector Search (HNSW) + Keyword Search (GIN)
   const vectorPromise = shouldRetrieve && questionEmbedding
@@ -863,6 +877,8 @@ Use the study material context as supporting evidence when it is present and rel
     ${branchClause}
     ${semesterClause}
     ${subjectClause}
+    ${moduleClause}
+    ${topicClause}
     ORDER BY c.embedding <=> ${vectorStr}::vector
     LIMIT 25
   `)
@@ -881,6 +897,8 @@ Use the study material context as supporting evidence when it is present and rel
       ${branchClause}
       ${semesterClause}
       ${subjectClause}
+      ${moduleClause}
+      ${topicClause}
       ORDER BY ts_rank(to_tsvector('english', c.text), plainto_tsquery('english', ${cleanKeywords})) DESC
       LIMIT 25
     `)
