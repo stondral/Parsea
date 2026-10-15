@@ -138,6 +138,7 @@ export function AdministratorWorkspace({
   const [documentEdit, setDocumentEdit] = useState<DocumentItem | null>(null)
   const [deleteIds, setDeleteIds] = useState<number[] | null>(null)
   const [health, setHealth] = useState<DocumentItem | null>(null)
+  const [replacement, setReplacement] = useState<DocumentItem | null>(null)
   const [level, setLevel] = useState<CurriculumCollection>('subjects')
   const [parentFilter, setParentFilter] = useState('')
   const [folderEdit, setFolderEdit] = useState<{
@@ -195,6 +196,13 @@ export function AdministratorWorkspace({
   const deleteFolder = trpc.administrator.deleteFolder.useMutation()
   const saveUser = trpc.administrator.saveUser.useMutation()
   const reindexDocument = trpc.administrator.reindexDocument.useMutation()
+  const [batchReindexing, setBatchReindexing] = useState(false)
+  const uploadJobs = trpc.administrator.uploadJobs.useQuery(undefined, {
+    enabled: tab === 'Materials',
+    refetchInterval: tab === 'Materials' ? 5000 : false,
+    retry: false,
+  })
+  const resumeUpload = trpc.administrator.processUpload.useMutation()
   const modalOpen =
     upload ||
     Boolean(documentEdit || deleteIds || health || folderEdit || folderDelete || personEdit)
@@ -463,7 +471,9 @@ export function AdministratorWorkspace({
                           name: '',
                           number: '',
                           code: '',
-                          parentId: Number(parentFilter) || null,
+                          parentId:
+                            Number(parentFilter) ||
+                            (parents.data?.items.length === 1 ? parents.data.items[0].id : null),
                         }),
                       )
                     }
@@ -485,6 +495,43 @@ export function AdministratorWorkspace({
             )}
             {tab === 'Materials' && (
               <>
+                {Boolean(uploadJobs.data?.length) && (
+                  <details className="administrator-empty" open>
+                    <summary>Recent uploads · live indexing status</summary>
+                    <p>
+                      Uploads stay recorded if you close this page. Resume a queued or failed job
+                      here. Interrupted jobs can be retried after 15 minutes.
+                    </p>
+                    {uploadJobs.data?.map((job) => (
+                      <div key={job.id} className="administrator-row-actions">
+                        <span>
+                          {job.filename} · {job.stage} · {job.progress}%
+                          {job.error ? ` · ${job.error}` : ''}
+                        </span>
+                        {job.document_id && (
+                          <Link href={`/pdf/${job.document_id}`}>Read PDF ↗</Link>
+                        )}
+                        {['queued', 'failed', 'running'].includes(job.status) && (
+                          <button
+                            disabled={resumeUpload.isPending}
+                            onClick={async () => {
+                              try {
+                                const result = await resumeUpload.mutateAsync({ id: job.id })
+                                if (result.status === 'failed')
+                                  fail(new Error(result.error || 'Indexing failed.'))
+                                await refresh()
+                              } catch (error) {
+                                fail(error)
+                              }
+                            }}
+                          >
+                            Resume indexing
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </details>
+                )}
                 <QueryState
                   loading={documents.isLoading}
                   error={documents.error || subjects.error || modules.error}
@@ -498,7 +545,34 @@ export function AdministratorWorkspace({
                   <div className="administrator-selection">
                     <span>{selected.length} selected on this page</span>
                     <button
+                      disabled={batchReindexing}
+                      onClick={async () => {
+                        if (batchReindexing) return
+                        setBatchReindexing(true)
+                        const failed: number[] = []
+                        for (const [index, id] of selected.entries()) {
+                          setNotice(`Re-indexing PDF ${index + 1} of ${selected.length}…`)
+                          try {
+                            await reindexDocument.mutateAsync({ id })
+                          } catch {
+                            failed.push(id)
+                          }
+                        }
+                        setSelected(failed)
+                        setNotice(
+                          failed.length
+                            ? `${failed.length} PDFs could not re-index. They remain selected; use Replace PDF if their originals are unavailable.`
+                            : 'Selected PDFs re-indexed successfully.',
+                        )
+                        setBatchReindexing(false)
+                        await refresh()
+                      }}
+                    >
+                      {batchReindexing ? 'Re-indexing selected…' : 'Re-index selected'}
+                    </button>
+                    <button
                       className="administrator-danger"
+                      disabled={batchReindexing}
                       onClick={() => openDialog(() => setDeleteIds(selected))}
                     >
                       Delete selected
@@ -564,8 +638,10 @@ export function AdministratorWorkspace({
                                 onClick={() => openDialog(() => setHealth(doc))}
                               >
                                 {doc.health.chunks > 0 && doc.health.embedded === doc.health.chunks
-                                  ? 'Vectors saved'
-                                  : 'Needs indexing'}
+                                  ? 'Parsed & indexed'
+                                  : doc.health.pages > 0
+                                    ? 'Parsed · Re-index needed'
+                                    : 'Needs parsing'}
                               </button>
                               <small>
                                 {doc.health.pages} pages · {doc.health.embedded}/{doc.health.chunks}{' '}
@@ -579,6 +655,16 @@ export function AdministratorWorkspace({
                             </td>
                             <td>
                               <div className="administrator-row-actions">
+                                <button
+                                  onClick={() =>
+                                    openDialog(() => {
+                                      setReplacement(doc)
+                                      setUpload(true)
+                                    })
+                                  }
+                                >
+                                  Replace PDF
+                                </button>
                                 <Link href={`/pdf/${doc.id}`} target="_blank">
                                   Read ↗
                                 </Link>
@@ -653,6 +739,24 @@ export function AdministratorWorkspace({
                                 <button onClick={() => openDialog(() => setFolderEdit(folder))}>
                                   Edit
                                 </button>
+                                {(level === 'subjects' || level === 'modules') && (
+                                  <button
+                                    onClick={() => {
+                                      const child = level === 'subjects' ? 'modules' : 'topics'
+                                      setLevel(child)
+                                      openDialog(() =>
+                                        setFolderEdit({
+                                          name: '',
+                                          number: '',
+                                          code: '',
+                                          parentId: folder.id,
+                                        }),
+                                      )
+                                    }}
+                                  >
+                                    ＋ Add {level === 'subjects' ? 'module' : 'topic'}
+                                  </button>
+                                )}
                                 {(level === 'subjects' || level === 'modules') && (
                                   <button
                                     onClick={() => {
@@ -767,13 +871,20 @@ export function AdministratorWorkspace({
         </footer>
       </div>
       <UploadNoteModal
+        administrator
         isOpen={upload}
-        onClose={() => setUpload(false)}
-        initialSubjectId={subjectId}
-        initialModuleId={moduleId}
+        onClose={() => {
+          setUpload(false)
+          setReplacement(null)
+        }}
+        initialSubjectId={replacement ? String(replacement.subjectId || '') : subjectId}
+        initialModuleId={replacement ? String(replacement.moduleId || '') : moduleId}
+        replaceDocumentId={replacement?.id}
+        initialTitle={replacement?.name}
+        initialTopicId={replacement ? String(replacement.topicId || '') : ''}
         onSuccess={() => {
           refresh()
-          setNotice('PDFs uploaded. Check their index health in Materials.')
+          setNotice('PDF saved and indexed. Updated counts are in Materials.')
         }}
       />
       {documentEdit && (
@@ -1090,7 +1201,8 @@ export function AdministratorWorkspace({
           </p>
           <p className="administrator-muted">
             Re-indexing reads the saved PDF and replaces its extracted pages and vectors. It can
-            take a while for large PDFs. File replacement remains in advanced administration.
+            take a while for large PDFs. Use Replace PDF in Materials to upload a new original
+            without changing its links.
           </p>
           {error && (
             <p className="administrator-error" role="alert">

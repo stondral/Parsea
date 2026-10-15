@@ -4,6 +4,7 @@ import config from '@/payload.config'
 import { notFound } from 'next/navigation'
 import { getPresignedDownloadUrl } from '@/lib/r2'
 import { PDFCircleSearch } from '@/components/PDFCircleSearch'
+import { buildDownloadFilename } from '@/lib/documentClassification'
 
 interface PDFPageProps {
   params: Promise<{ id: string }>
@@ -41,11 +42,27 @@ export default async function PDFViewerPage(props: PDFPageProps) {
   if (!doc || !doc.filename) return notFound()
 
   let directPdfUrl = `/api/documents/file/${encodeURIComponent(doc.filename)}`
+  const downloadFilename = buildDownloadFilename({
+    subjectName: doc.subject?.name || 'Academic Notes',
+    moduleNumber: doc.module?.number,
+    moduleName: doc.module?.name,
+    topicNumber: doc.topic?.number,
+    topicName: doc.topic?.name,
+    title: doc.name,
+    originalFilename: doc.filename,
+  })
+  let downloadUrl = directPdfUrl
   let isR2 = false
 
   if (doc.storageKey) {
     try {
       directPdfUrl = await getPresignedDownloadUrl(doc.storageKey, doc.r2Bucket || undefined)
+      downloadUrl = await getPresignedDownloadUrl(
+        doc.storageKey,
+        doc.r2Bucket || undefined,
+        3600,
+        downloadFilename,
+      )
       isR2 = true
     } catch (error) {
       console.error('Failed generating R2 presigned URL:', error)
@@ -109,34 +126,46 @@ export default async function PDFViewerPage(props: PDFPageProps) {
         <div className="pdf-viewer-actions">
           {isR2 && <span className="pdf-storage-badge">R2 direct</span>}
           <span className="pdf-page-badge">Page {pageNumber}</span>
-          {!unavailableOnVercel && <a
-            href={directPdfUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            download
-            className="pdf-download-link"
-          >
-            Download PDF
-          </a>}
+          {!unavailableOnVercel && (
+            <a
+              href={downloadUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              download={downloadFilename}
+              className="pdf-download-link"
+            >
+              Download PDF
+            </a>
+          )}
         </div>
       </header>
 
       <div className={`pdf-viewer-workspace${uniqueVisuals.length ? ' has-visuals' : ''}`}>
         <div className="pdf-frame-wrap">
-          {unavailableOnVercel ? <section className="pdf-storage-unavailable" role="alert">
-            <span aria-hidden="true">↥</span>
-            <h1>This PDF needs a fresh upload.</h1>
-            <p>The library record is here, but its cloud PDF is unavailable. This deployment cannot read a PDF saved only on a previous server.</p>
-            <p>An administrator needs to upload the original file again and confirm that its cloud copy is saved.</p>
-            <Link href="/notes">Back to your library →</Link>
-          </section> : <PDFCircleSearch
-            url={directPdfUrl}
-            title={doc.name}
-            initialPage={pageNumber}
-            subject={subjectName}
-            branch={doc.subject?.semester?.branch?.name}
-            semester={doc.subject?.semester?.number}
-          />}
+          {unavailableOnVercel ? (
+            <section className="pdf-storage-unavailable" role="alert">
+              <span aria-hidden="true">↥</span>
+              <h1>This PDF needs a fresh upload.</h1>
+              <p>
+                The library record is here, but its cloud PDF is unavailable. This deployment cannot
+                read a PDF saved only on a previous server.
+              </p>
+              <p>
+                An administrator needs to upload the original file again and confirm that its cloud
+                copy is saved.
+              </p>
+              <Link href="/notes">Back to your library →</Link>
+            </section>
+          ) : (
+            <PDFCircleSearch
+              url={directPdfUrl}
+              title={doc.name}
+              initialPage={pageNumber}
+              subject={subjectName}
+              branch={doc.subject?.semester?.branch?.name}
+              semester={doc.subject?.semester?.number}
+            />
+          )}
         </div>
 
         {uniqueVisuals.length > 0 && (

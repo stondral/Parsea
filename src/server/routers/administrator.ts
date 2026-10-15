@@ -2,7 +2,9 @@ import { TRPCError } from '@trpc/server'
 import { z } from 'zod'
 import { sql } from 'drizzle-orm'
 import type { Where } from 'payload'
+import { EMBEDDING_MODEL } from '@/lib/embeddings'
 import { adminProcedure, router } from '../trpc'
+import { createUploadProcedures } from './uploads'
 import {
   curriculum,
   relationId,
@@ -30,6 +32,21 @@ function item(doc: any, slug: CurriculumCollection): CurriculumItem {
 }
 
 export const administratorRouter = router({
+  ...createUploadProcedures(adminProcedure),
+  uploadJobs: adminProcedure.query(async ({ ctx }) => {
+    const result = await (ctx.payload.db as any).drizzle
+      .execute(sql`SELECT id, filename, status, progress, stage, error, document_id
+      FROM document_upload_jobs ORDER BY created_at DESC LIMIT 30`)
+    return result.rows as Array<{
+      id: string
+      filename: string
+      status: string
+      progress: number
+      stage: string
+      error: string | null
+      document_id: number | null
+    }>
+  }),
   overview: adminProcedure.query(async ({ ctx }) => {
     const collections = ['documents', 'subjects', 'modules', 'users'] as const
     const counts = await Promise.all(
@@ -200,7 +217,7 @@ export const administratorRouter = router({
       FROM documents d
       LEFT JOIN (SELECT document_id, count(*)::int AS pages FROM document_pages
         WHERE document_id IN (${includedIds}) GROUP BY document_id) p ON p.document_id = d.id
-      LEFT JOIN (SELECT document_id, count(*)::int AS chunks, count(embedding)::int AS embedded FROM chunks
+      LEFT JOIN (SELECT document_id, count(*)::int AS chunks, count(embedding) FILTER (WHERE embedding_model = ${EMBEDDING_MODEL})::int AS embedded FROM chunks
         WHERE document_id IN (${includedIds}) GROUP BY document_id) c ON c.document_id = d.id
       WHERE d.id IN (${includedIds})
     `)
@@ -234,6 +251,7 @@ export const administratorRouter = router({
             doc.topic && typeof doc.topic === 'object'
               ? `${doc.topic.number}: ${doc.topic.name}`
               : '',
+          topicId: relationId(doc.topic),
           health: stats.get(doc.id) || { pages: 0, chunks: 0, embedded: 0 },
         })),
       }

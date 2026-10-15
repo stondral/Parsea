@@ -52,6 +52,28 @@ const nextConfig: NextConfig = {
     'dotenv',
   ],
 
+  // Explicit Linux CPU binding: Transformers resolves native ONNX dynamically.
+  outputFileTracingIncludes: {
+    '/*': [
+      'node_modules/.pnpm/onnxruntime-node@*/node_modules/onnxruntime-node/dist/**',
+      'node_modules/.pnpm/onnxruntime-node@*/node_modules/onnxruntime-node/package.json',
+      'node_modules/.pnpm/onnxruntime-node@*/node_modules/onnxruntime-node/bin/napi-v*/linux/x64/*',
+      'node_modules/.pnpm/@napi-rs+canvas@*/node_modules/@napi-rs/canvas/**',
+      'node_modules/.pnpm/@napi-rs+canvas-linux-x64-gnu@*/node_modules/@napi-rs/canvas-linux-x64-gnu/**',
+      'node_modules/.pnpm/tesseract.js-core@*/node_modules/tesseract.js-core/*lstm*',
+    ],
+  },
+  outputFileTracingExcludes: {
+    '/*': [
+      '**/onnxruntime-node/bin/napi-v*/win32/**',
+      '**/onnxruntime-node/bin/napi-v*/darwin/**',
+      '**/onnxruntime-node/bin/napi-v*/linux/arm64/**',
+      '**/onnxruntime-node/bin/napi-v*/linux/x64/*cuda*',
+      '**/onnxruntime-node/bin/napi-v*/linux/x64/*tensorrt*',
+      '.cache/**',
+      'media/**',
+    ],
+  },
 
   images: {
     localPatterns: [
@@ -78,11 +100,7 @@ const nextConfig: NextConfig = {
         ? [existingExternals]
         : []
 
-    webpackConfig.externals = [
-      ...asArray,
-      '@napi-rs/canvas',
-      'canvas',
-    ]
+    webpackConfig.externals = [...asArray, '@napi-rs/canvas', 'canvas']
 
     return webpackConfig
   },
@@ -93,4 +111,3 @@ const nextConfig: NextConfig = {
 }
 
 export default withPayload(nextConfig, { devBundleServerPackages: false })
-

@@ -7,6 +7,7 @@ vi.mock('next/navigation', () => {
   return { useSearchParams: () => params, useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }
 })
 vi.mock('@/components/AmbientGrid', () => ({ AmbientGrid: () => null }))
+vi.mock('@/trpc/client', () => ({ trpc: { chat: { refreshImage: { useQuery: () => ({ data: null, refetch: vi.fn() }) } } } }))
 
 describe('Conversation-first workspace (isolated DOM, no live API)', () => {
   beforeEach(() => {
@@ -83,6 +84,22 @@ describe('Conversation-first workspace (isolated DOM, no live API)', () => {
     expect(container.querySelector('.chat-shell')?.className).not.toContain('is-focus-mode')
   })
 
+  it('minimises and restores navigation independently of focus and keeps history available', async () => {
+    const { container } = render(<ChatPage />)
+    fireEvent.click(screen.getByRole('button', { name: 'Minimise navigation' }))
+    expect(container.querySelector('#chat-navigation')?.hasAttribute('hidden')).toBe(true)
+    expect(container.querySelector('.chat-shell')?.className).not.toContain('is-focus-mode')
+    fireEvent.click(screen.getByRole('button', { name: 'Open chat history' }))
+    expect(screen.getByRole('dialog', { name: 'Chat history' })).toBeDefined()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.click(screen.getByRole('button', { name: 'Show navigation' }))
+    expect(container.querySelector('#chat-navigation')?.hasAttribute('hidden')).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: 'Enter focus mode' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show navigation' }))
+    expect(container.querySelector('#chat-navigation')?.hasAttribute('hidden')).toBe(false)
+    expect(container.querySelector('.chat-shell')?.className).not.toContain('is-focus-mode')
+  })
+
   function savedAnswer(sources: unknown[] = [], images: unknown[] = []) {
     const messages = [
       { id: 'question', role: 'user', content: 'Explain logic', timestamp: 1 },
@@ -110,7 +127,7 @@ describe('Conversation-first workspace (isolated DOM, no live API)', () => {
     expect(screen.queryByText('From your study materials')).toBeNull()
   })
 
-  it('keeps real citations and diagrams in initially collapsed disclosures', async () => {
+  it('shows real citations and diagrams in collapsible disclosures', async () => {
     savedAnswer(
       [{ document: 'Logic', page: 2, url: '/pdf/2?page=2' }],
       [{ url: '/image.png', page: 2, caption: 'Truth table' }],
@@ -119,7 +136,7 @@ describe('Conversation-first workspace (isolated DOM, no live API)', () => {
     await screen.findByText('From your study materials')
     const disclosures = container.querySelectorAll<HTMLDetailsElement>('details.chat-evidence')
     expect(disclosures.length).toBe(2)
-    expect([...disclosures].every((item) => !item.open)).toBe(true)
+    expect([...disclosures].every((item) => item.open)).toBe(true)
     disclosures.forEach((item) => (item.open = true))
     expect(screen.getByRole('link', { name: 'Open PDF' }).getAttribute('href')).toBe(
       '/pdf/2?page=2',

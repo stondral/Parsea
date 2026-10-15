@@ -3,10 +3,27 @@ import { cleanup, fireEvent, render, screen, waitFor, act } from '@testing-libra
 import { UploadNoteModal } from '@/components/UploadNoteModal'
 import { estimateUploadProgress } from '@/lib/uploadProgress'
 
-const mocks = vi.hoisted(() => ({ invalidate: vi.fn(async () => {}), upload: vi.fn() }))
+const mocks = vi.hoisted(() => ({
+  invalidate: vi.fn(async () => {}),
+  upload: vi.fn(),
+  prepare: vi.fn(),
+  complete: vi.fn(),
+  process: vi.fn(),
+  direct: vi.fn(),
+}))
+vi.mock('@/lib/directUpload', () => ({
+  uploadPDFDirect: mocks.direct,
+  smallPDFBase64: vi.fn(),
+  PDFContentHash: vi.fn(async () => 'a'.repeat(64)),
+}))
 vi.mock('@/trpc/client', () => {
   const query = (data: unknown) => ({
-    useQuery: () => ({ data, isLoading: false, isError: false }),
+    useQuery: () => ({
+      data,
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(async () => ({ data })),
+    }),
   })
   return {
     trpc: {
@@ -24,6 +41,14 @@ vi.mock('@/trpc/client', () => {
         getModules: query([]),
         getTopics: query([]),
       },
+      uploads: {
+        prepareUpload: { useMutation: () => ({ mutateAsync: mocks.prepare }) },
+        uploadSmallPDF: { useMutation: () => ({ mutateAsync: vi.fn() }) },
+        completeUpload: { useMutation: () => ({ mutateAsync: mocks.complete }) },
+        processUpload: { useMutation: () => ({ mutateAsync: mocks.process }) },
+        uploadStatus: query(undefined),
+        myUploads: query([]),
+      },
     },
   }
 })
@@ -32,6 +57,14 @@ describe('Honest optimistic upload progress', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.stubGlobal('fetch', mocks.upload)
+    mocks.prepare.mockResolvedValue({
+      id: '00000000-0000-4000-8000-000000000001',
+      url: 'https://cloud.test/upload',
+      status: 'uploading',
+    })
+    mocks.direct.mockResolvedValue(undefined)
+    mocks.complete.mockResolvedValue({ status: 'queued' })
+    mocks.process.mockResolvedValue({ status: 'ready', document_id: 7 })
   })
   afterEach(() => {
     cleanup()
@@ -48,6 +81,32 @@ describe('Honest optimistic upload progress', () => {
     expect(estimateUploadProgress(600_000).message).toContain('waiting for confirmation')
   })
 
+  it('starts admin indexing after a drop without waiting for metadata submission', async () => {
+    vi.useFakeTimers()
+    mocks.prepare.mockResolvedValue({
+      id: '00000000-0000-4000-8000-000000000001',
+      url: 'https://cloud.test/upload',
+      status: 'uploading',
+    })
+    mocks.direct.mockResolvedValue(undefined)
+    mocks.complete.mockResolvedValue({ status: 'queued' })
+    mocks.process.mockResolvedValue({ status: 'ready', document_id: 7 })
+    render(<UploadNoteModal isOpen administrator onClose={vi.fn()} initialSubjectId="1" />)
+    fireEvent.change(screen.getByLabelText('Choose PDF files'), {
+      target: { files: [new File(['%PDF-test'], '1.pdf', { type: 'application/pdf' })] },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1300)
+    })
+    expect(mocks.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Study notes 1', subject: 1 }),
+    )
+    expect(mocks.direct).toHaveBeenCalledTimes(1)
+    expect(mocks.process).toHaveBeenCalledTimes(1)
+    expect(mocks.upload).not.toHaveBeenCalled()
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('100')
+  })
+
   function startUpload() {
     render(<UploadNoteModal isOpen onClose={vi.fn()} initialSubjectId="1" />)
     fireEvent.change(screen.getByLabelText('Choose PDF files'), {
@@ -56,19 +115,20 @@ describe('Honest optimistic upload progress', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Upload 1 PDF' }))
   }
 
-  it('shows estimated progress while waiting and 100% only after the response', async () => {
+  it('shows confirmed stages and 100% only after the index response', async () => {
     let resolve!: (value: unknown) => void
-    mocks.upload.mockImplementationOnce(
+    mocks.process.mockImplementationOnce(
       () =>
         new Promise((done) => {
           resolve = done
         }),
     )
     startUpload()
-    await screen.findByLabelText('Estimated batch upload progress')
+    await screen.findByLabelText('Confirmed batch upload progress')
     expect(Number(screen.getByRole('progressbar').getAttribute('aria-valuenow'))).toBeLessThan(100)
-    expect(screen.getByText(/not a live indexing measurement/)).toBeDefined()
-    await act(async () => resolve({ ok: true, json: async () => ({ success: true }) }))
+    expect(screen.getByText(/Live transfer and indexing stages/)).toBeDefined()
+    await waitFor(() => expect(mocks.process).toHaveBeenCalled())
+    await act(async () => resolve({ status: 'ready', document_id: 7 }))
     await waitFor(() =>
       expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('100'),
     )
@@ -76,13 +136,21 @@ describe('Honest optimistic upload progress', () => {
   })
 
   it('keeps a failed upload retryable without a false completion state', async () => {
-    mocks.upload.mockResolvedValueOnce({
-      ok: false,
-      json: async () => ({ error: 'Storage unavailable' }),
-    })
+    mocks.prepare.mockRejectedValueOnce(new Error('Storage unavailable'))
     startUpload()
     await screen.findByRole('button', { name: 'Retry 1 file' })
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0')
     expect(screen.queryByText('All PDFs uploaded. Nice work.')).toBeNull()
+  })
+  it('continues queued page batches for student uploads without REST', async () => {
+    mocks.process
+      .mockResolvedValueOnce({ status: 'queued' })
+      .mockResolvedValueOnce({ status: 'ready', document_id: 7 })
+    startUpload()
+    await waitFor(() =>
+      expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('100'),
+    )
+    expect(mocks.process).toHaveBeenCalledTimes(2)
+    expect(mocks.upload).not.toHaveBeenCalled()
   })
 })

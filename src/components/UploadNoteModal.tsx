@@ -4,7 +4,7 @@ import React, { useEffect, useState, useRef, useId } from 'react'
 import { trpc } from '@/trpc/client'
 import { classifyDocumentFilename } from '@/lib/documentClassification'
 import { useDialogFocus } from '@/hooks/useDialogFocus'
-import { estimateUploadProgress } from '@/lib/uploadProgress'
+import { uploadPDFDirect, smallPDFBase64, PDFContentHash } from '@/lib/directUpload'
 import './upload.css'
 
 interface UploadNoteModalProps {
@@ -14,6 +14,9 @@ interface UploadNoteModalProps {
   initialSubjectId?: string
   initialModuleId?: string
   initialTopicId?: string
+  replaceDocumentId?: number
+  initialTitle?: string
+  administrator?: boolean
 }
 
 interface UploadEntry {
@@ -46,6 +49,9 @@ export function UploadNoteModal({
   initialSubjectId = '',
   initialModuleId = '',
   initialTopicId = '',
+  replaceDocumentId,
+  initialTitle = '',
+  administrator = false,
 }: UploadNoteModalProps) {
   const [uploads, setUploads] = useState<UploadEntry[]>([])
   const [subjectId, setSubjectId] = useState(initialSubjectId)
@@ -56,12 +62,26 @@ export function UploadNoteModal({
   const [isUploading, setIsUploading] = useState(false)
   const [error, setError] = useState('')
   const [dragActive, setDragActive] = useState(false)
-  const [activeStartedAt, setActiveStartedAt] = useState(0)
-  const [progressNow, setProgressNow] = useState(0)
+  const [autoStart, setAutoStart] = useState(true)
+  const [jobId, setJobId] = useState('')
+  const [transferProgress, setTransferProgress] = useState(0)
+  const submitting = useRef(false)
   const dialogRef = useRef<HTMLDivElement>(null)
   const fileInputId = useId()
   const titleId = useId()
   const utils = trpc.useUtils()
+  const prepareUpload = trpc.uploads.prepareUpload.useMutation()
+  const uploadSmallPDF = trpc.uploads.uploadSmallPDF.useMutation()
+  const completeUpload = trpc.uploads.completeUpload.useMutation()
+  const processUpload = trpc.uploads.processUpload.useMutation()
+  const recent = trpc.uploads.myUploads.useQuery(undefined, { enabled: isOpen, retry: false })
+  const job = trpc.uploads.uploadStatus.useQuery(
+    { id: jobId },
+    {
+      enabled: Boolean(jobId),
+      refetchInterval: isUploading ? 1500 : false,
+    },
+  )
   const subjectsQuery = trpc.notes.getSubjects.useQuery(undefined, {
     enabled: isOpen,
     staleTime: 60 * 60 * 1000,
@@ -79,14 +99,38 @@ export function UploadNoteModal({
   const pending = uploads.filter((entry) => entry.status !== 'uploaded')
   const firstFile = uploads[0]?.file
   const activeFile = uploads.find((entry) => entry.status === 'uploading')
-  const estimate = estimateUploadProgress(progressNow - activeStartedAt)
-  const batchPercent = uploads.length ? Math.round((completed + (activeFile ? estimate.percent / 100 : 0)) / uploads.length * 100) : 0
+  const liveProgress = Math.max((transferProgress / 100) * 10, job.data?.progress || 0)
+  const batchPercent = uploads.length
+    ? Math.round(((completed + (activeFile ? liveProgress / 100 : 0)) / uploads.length) * 100)
+    : 0
 
   useEffect(() => {
-    if (!isUploading) return
-    const timer = window.setInterval(() => setProgressNow(Date.now()), 1000)
-    return () => window.clearInterval(timer)
-  }, [isUploading])
+    if (
+      !autoStart ||
+      !isOpen ||
+      isUploading ||
+      submitting.current ||
+      !subjectId ||
+      !uploads.some((entry) => entry.status === 'ready')
+    )
+      return
+    // A brief undo window lets the admin turn off auto-start or change the folder.
+    const timer = window.setTimeout(() => {
+      void handleSubmit()
+    }, 1200)
+    return () => window.clearTimeout(timer)
+  }, [
+    administrator,
+    autoStart,
+    isOpen,
+    isUploading,
+    subjectId,
+    moduleId,
+    topicId,
+    uploads,
+    chapter,
+    type,
+  ])
 
   useDialogFocus(isOpen, dialogRef, () => {
     if (!isUploading) onClose()
@@ -122,11 +166,14 @@ export function UploadNoteModal({
   function addFiles(files: File[]) {
     if (isUploading) return
     const valid = files.filter(
-      (file) => file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf',
+      (file) =>
+        (file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') &&
+        file.size > 0 &&
+        file.size <= 25 * 1024 * 1024,
     )
     setError(
       valid.length !== files.length
-        ? 'Only PDF files were added. Please select PDFs for this batch.'
+        ? 'Only non-empty PDFs up to 25 MB were added. Split larger PDFs into module files.'
         : '',
     )
     setUploads((previous) => {
@@ -134,53 +181,93 @@ export function UploadNoteModal({
         previous.map((entry) => `${entry.file.name}:${entry.file.size}:${entry.file.lastModified}`),
       )
       return [
-        ...previous,
+        ...(replaceDocumentId ? [] : previous),
         ...valid
           .filter((file) => !existing.has(`${file.name}:${file.size}:${file.lastModified}`))
+          .slice(0, replaceDocumentId ? 1 : undefined)
           .map((file) => ({
             id: crypto.randomUUID(),
             file,
-            title: classifyDocumentFilename(file.name).title,
+            title:
+              initialTitle ||
+              (/^\d+$/.test(classifyDocumentFilename(file.name).title)
+                ? `Study notes ${classifyDocumentFilename(file.name).title}`
+                : classifyDocumentFilename(file.name).title),
             status: 'ready' as const,
           })),
       ]
     })
   }
 
-  async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault()
+  async function finishIndexing(id: string) {
+    let result = await processUpload.mutateAsync({ id })
+    while (result.status === 'queued' || result.status === 'running') {
+      if (result.status === 'running')
+        await new Promise((resolve) => window.setTimeout(resolve, 1500))
+      result = await processUpload.mutateAsync({ id })
+    }
+    if (result.status !== 'ready')
+      throw new Error(
+        result.error || 'Indexing failed. Your uploaded file remains in recent uploads for retry.',
+      )
+    await recent.refetch()
+    return result
+  }
+
+  async function handleSubmit(event?: React.FormEvent) {
+    event?.preventDefault()
     if (
       !subjectId ||
       !pending.length ||
       pending.some((entry) => !entry.title.trim()) ||
-      isUploading
+      isUploading ||
+      submitting.current
     )
       return
+    submitting.current = true
     setIsUploading(true)
     setError('')
     let successful = 0
     let failed = 0
     for (const entry of pending) {
-      const startedAt = Date.now()
-      setActiveStartedAt(startedAt)
-      setProgressNow(startedAt)
       setUploads((previous) =>
         previous.map((item) =>
           item.id === entry.id ? { ...item, status: 'uploading', error: undefined } : item,
         ),
       )
-      const data = new FormData()
-      data.append('file', entry.file)
-      data.append('name', entry.title.trim())
-      data.append('chapter', chapter.trim())
-      data.append('type', type)
-      data.append('subject', subjectId)
-      if (moduleId) data.append('module', moduleId)
-      if (topicId) data.append('topic', topicId)
       try {
-        const response = await fetch('/api/notes/upload', { method: 'POST', body: data })
-        const result = await response.json().catch(() => ({}))
-        if (!response.ok) throw new Error(result.error || 'Upload failed. Please try again.')
+        {
+          setJobId('')
+          setTransferProgress(0)
+          const prepared = await prepareUpload.mutateAsync({
+            requestId: entry.id,
+            contentHash: await PDFContentHash(entry.file),
+            originalFilename: entry.file.name,
+            bytes: entry.file.size,
+            name: entry.title.trim(),
+            chapter: chapter.trim(),
+            type,
+            subject: Number(subjectId),
+            module: Number(moduleId) || undefined,
+            topic: Number(topicId) || undefined,
+            replaceDocumentId,
+          })
+          setJobId(prepared.id)
+          if (prepared.url) {
+            try {
+              await uploadPDFDirect(prepared.url, entry.file, setTransferProgress)
+            } catch (error) {
+              if (entry.file.size > 3 * 1024 * 1024) throw error
+              await uploadSmallPDF.mutateAsync({
+                id: prepared.id,
+                base64: await smallPDFBase64(entry.file),
+              })
+              setTransferProgress(100)
+            }
+          }
+          await completeUpload.mutateAsync({ id: prepared.id })
+          await finishIndexing(prepared.id)
+        }
         successful++
         setUploads((previous) =>
           previous.map((item) => (item.id === entry.id ? { ...item, status: 'uploaded' } : item)),
@@ -201,6 +288,7 @@ export function UploadNoteModal({
       }
     }
     setIsUploading(false)
+    submitting.current = false
     if (successful) {
       await Promise.all([
         utils.notes.list.invalidate(),
@@ -236,8 +324,14 @@ export function UploadNoteModal({
         <header className="parsea-upload-header">
           <div>
             <span>MAKE IT YOURS</span>
-            <h2 id={titleId}>Bring your notes.</h2>
-            <p>One module. As many PDFs as you need.</p>
+            <h2 id={titleId}>
+              {replaceDocumentId ? 'Replace and re-index PDF.' : 'Bring your notes.'}
+            </h2>
+            <p>
+              {replaceDocumentId
+                ? 'Keep this document ID and links. Choose one replacement PDF.'
+                : 'One module. As many PDFs as you need.'}
+            </p>
           </div>
           <button
             type="button"
@@ -248,7 +342,52 @@ export function UploadNoteModal({
             ×
           </button>
         </header>
+        {Boolean(recent.data?.length) && (
+          <details>
+            <summary>Your recent uploads</summary>
+            {recent.data?.map((item) => (
+              <p key={item.id}>
+                {item.filename} · {item.stage} · {item.progress}%{' '}
+                {item.document_id && <a href={`/pdf/${item.document_id}`}>Read PDF</a>}
+                {['queued', 'failed', 'running'].includes(item.status) && (
+                  <button
+                    type="button"
+                    disabled={isUploading}
+                    onClick={async () => {
+                      setIsUploading(true)
+                      setJobId(item.id)
+                      setError('')
+                      try {
+                        await finishIndexing(item.id)
+                        onSuccess?.()
+                      } catch (error) {
+                        setError(
+                          error instanceof Error ? error.message : 'Could not resume indexing.',
+                        )
+                      } finally {
+                        setIsUploading(false)
+                      }
+                    }}
+                  >
+                    Resume indexing
+                  </button>
+                )}
+              </p>
+            ))}
+          </details>
+        )}
         <form onSubmit={handleSubmit} className="parsea-upload-form" aria-busy={isUploading}>
+          {
+            <label>
+              <input
+                type="checkbox"
+                checked={autoStart}
+                disabled={isUploading}
+                onChange={(event) => setAutoStart(event.target.checked)}
+              />{' '}
+              Start automatically once a subject is selected
+            </label>
+          }
           {error && (
             <p className="parsea-upload-error" role="alert">
               {error}
@@ -286,10 +425,39 @@ export function UploadNoteModal({
           {uploads.length > 0 && (
             <div className="parsea-upload-queue">
               <div className={`parsea-upload-progress${isUploading ? ' is-working' : ''}`}>
-                <div className="parsea-upload-progress-heading"><strong>{isUploading ? 'A little closer to a clearer library.' : `${completed} of ${uploads.length} PDFs saved`}</strong><span>{batchPercent}%{isUploading ? ' est.' : ''}</span></div>
-                <div className="parsea-upload-meter" role="progressbar" aria-valuenow={batchPercent} aria-valuemin={0} aria-valuemax={100} aria-label={isUploading ? 'Estimated batch upload progress' : 'Confirmed batch upload progress'} aria-valuetext={`${completed} of ${uploads.length} PDFs saved${isUploading ? '; remaining progress is estimated' : ''}`}><span style={{ width: `${batchPercent}%` }} /></div>
-                <p role="status" aria-live="polite">{isUploading ? estimate.message : completed === uploads.length ? 'All uploads confirmed. Your notes have a home.' : 'Your PDFs are ready when you are.'}</p>
-                {isUploading && <small>{completed} of {uploads.length} saved · {activeFile?.file.name}<br />Estimated progress, not a live indexing measurement. Completion waits for the server.</small>}
+                <div className="parsea-upload-progress-heading">
+                  <strong>
+                    {isUploading
+                      ? 'A little closer to a clearer library.'
+                      : `${completed} of ${uploads.length} PDFs saved`}
+                  </strong>
+                  <span>{batchPercent}%</span>
+                </div>
+                <div
+                  className="parsea-upload-meter"
+                  role="progressbar"
+                  aria-valuenow={batchPercent}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label={'Confirmed batch upload progress'}
+                  aria-valuetext={`${completed} of ${uploads.length} PDFs saved`}
+                >
+                  <span style={{ width: `${batchPercent}%` }} />
+                </div>
+                <p role="status" aria-live="polite">
+                  {isUploading
+                    ? job.data?.stage || `Uploading PDF · ${transferProgress}% transferred`
+                    : completed === uploads.length
+                      ? 'All uploads confirmed. Your notes have a home.'
+                      : 'Your PDFs are ready when you are.'}
+                </p>
+                {isUploading && (
+                  <small>
+                    {completed} of {uploads.length} saved · {activeFile?.file.name}
+                    <br />
+                    Live transfer and indexing stages. Completion is confirmed by the server.
+                  </small>
+                )}
               </div>
               {uploads.map((entry) => (
                 <div key={entry.id} className="parsea-upload-entry" data-status={entry.status}>

@@ -90,6 +90,8 @@
 }
 .pdf-circle-selection {
   flex-shrink: 0;
+  max-height: 45%;
+  overflow-y: auto;
   padding: 12px;
   margin-top: 12px;
   background: #fff;
@@ -128,6 +130,15 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+.pdf-circle-answer { margin-top: 14px; padding: 14px; border: 1px solid #cbd6ec; border-radius: 12px; background: #f7f9fd; color: #344768; font-size: .85rem; line-height: 1.8; overflow-wrap: anywhere; }
+.pdf-circle-answer > strong { font-size: .7rem; color: #6c7d9b; }
+.pdf-circle-selection .pdf-circle-answer p { font-size: inherit; color: inherit; }
+.pdf-circle-answer :is(pre, table, .katex-display) { overflow-x: auto; max-width: 100%; }
+.pdf-circle-answer a { display: block; color: #3f5b94; }
+.pdf-circle-answer summary { cursor: pointer; color: #516b9b; }
+@media (pointer: coarse) {
+  .pdf-circle-reader button { min-height: 44px; }
 }
 @media (max-width: 520px) {
   .pdf-circle-reader.is-active {

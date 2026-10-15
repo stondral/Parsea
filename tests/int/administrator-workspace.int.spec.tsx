@@ -33,6 +33,8 @@ vi.mock('@/trpc/client', () => {
         notes: { invalidate: mocks.refresh },
       }),
       administrator: {
+        uploadJobs: query([]),
+        processUpload: mutation(mocks.reindex),
         overview: query({ documents: 1, subjects: 1, modules: 1, users: 2 }),
         options: query({
           items: [{ id: 1, name: 'Discrete Mathematics', number: '', parentId: 3 }],
@@ -104,7 +106,7 @@ describe('Calm administrator workspace', () => {
   it('shows real missing-index status and saves metadata independently', async () => {
     setup()
     fireEvent.click(screen.getByRole('button', { name: 'Materials' }))
-    expect(screen.getByRole('button', { name: 'Needs indexing' })).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Parsed · Re-index needed' })).toBeDefined()
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Logic and proofs' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
@@ -127,6 +129,36 @@ describe('Calm administrator workspace', () => {
     expect(mocks.remove).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Delete PDFs' }))
     await waitFor(() => expect(mocks.remove).toHaveBeenCalledWith({ ids: [2] }))
+  })
+
+  it('creates a subject with the only available parent preselected', async () => {
+    setup()
+    fireEvent.click(screen.getByRole('button', { name: 'Curriculum' }))
+    fireEvent.click(screen.getByRole('button', { name: '＋ Add subject' }))
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Linear Algebra' } })
+    expect(
+      (screen.getByRole('button', { name: 'Save folder' }) as HTMLButtonElement).disabled,
+    ).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: 'Save folder' }))
+    await waitFor(() =>
+      expect(mocks.save).toHaveBeenCalledWith(
+        expect.objectContaining({ collection: 'subjects', name: 'Linear Algebra', parentId: 1 }),
+      ),
+    )
+  })
+
+  it('adds a module directly beneath a subject without another parent choice', async () => {
+    setup()
+    fireEvent.click(screen.getByRole('button', { name: 'Curriculum' }))
+    fireEvent.click(screen.getByRole('button', { name: '＋ Add module' }))
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Logic' } })
+    fireEvent.change(screen.getByLabelText('Number'), { target: { value: '1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save folder' }))
+    await waitFor(() =>
+      expect(mocks.save).toHaveBeenCalledWith(
+        expect.objectContaining({ collection: 'modules', name: 'Logic', number: '1', parentId: 1 }),
+      ),
+    )
   })
 
   it('requires permission acknowledgement before a profile role change', async () => {

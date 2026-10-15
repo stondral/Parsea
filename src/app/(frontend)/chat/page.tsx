@@ -7,6 +7,8 @@ import { useDialogFocus } from '@/hooks/useDialogFocus'
 import { AccountMenu } from '@/components/AccountMenu'
 import { AmbientGrid } from '@/components/AmbientGrid'
 import { BrandMark } from '@/components/BrandMark'
+import { SourceVisual } from '@/components/SourceVisual'
+import type { CitedImage } from '@/lib/rag'
 import './chat.css'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -19,13 +21,6 @@ interface SourceCitation {
   chapter?: string
   page: number
   url: string
-}
-
-interface CitedImage {
-  url: string
-  caption: string
-  page: number
-  document: string
 }
 
 interface ConversationSummary {
@@ -127,6 +122,7 @@ function ChatWorkspace() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [focusMode, setFocusMode] = useState(false)
+  const [navigationHidden, setNavigationHidden] = useState(false)
   const [showComposerSettings, setShowComposerSettings] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(true)
   const [historySearch, setHistorySearch] = useState('')
@@ -1126,7 +1122,7 @@ function ChatWorkspace() {
       <AmbientGrid />
 
       <div className="chat-workspace">
-        <nav className="chat-navigation-rail" aria-label="Study workspace navigation" inert={historyOpen || undefined}>
+        <nav id="chat-navigation" hidden={navigationHidden || focusMode} className="chat-navigation-rail" aria-label="Study workspace navigation" inert={historyOpen || undefined}>
           <Link href="/" className="chat-rail-brand" aria-label="Parsea home" title="Parsea home"><BrandMark /></Link>
           <div className="chat-rail-links">
             <button type="button" aria-label="Start a new chat" title="New chat" onClick={() => handleStartNewChat()} disabled={isStreaming}><span aria-hidden="true">＋</span><small>New</small></button>
@@ -1309,6 +1305,24 @@ function ChatWorkspace() {
         <div className="chat-main" ref={mainRef} inert={sidebarIsDrawer && historyOpen}>
           <header className="chat-workspace-heading">
             <h1 className="visually-hidden">Study chat</h1>
+            <button
+              type="button"
+              className="chat-navigation-toggle"
+              aria-label={navigationHidden || focusMode ? 'Show navigation' : 'Minimise navigation'}
+              title={navigationHidden || focusMode ? 'Show navigation' : 'Minimise navigation'}
+              aria-expanded={!navigationHidden && !focusMode}
+              aria-controls="chat-navigation"
+              onClick={() => {
+                if (focusMode) setFocusMode(false)
+                setNavigationHidden(!(navigationHidden || focusMode))
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                <rect x="2" y="3" width="16" height="14" rx="3" />
+                <path d="M7 3v14" />
+                <path d={navigationHidden || focusMode ? 'm10 7 3 3-3 3' : 'm13 7-3 3 3 3'} />
+              </svg>
+            </button>
             <button
               type="button"
               className="chat-history-toggle"
@@ -1652,22 +1666,14 @@ function ChatWorkspace() {
 
                     {/* Diagrams (Deep Analysis Mode) */}
                     {msg.images && msg.images.length > 0 && (
-                      <details className="chat-section chat-evidence">
+                      <details className="chat-section chat-evidence" open>
                         <summary className="chat-section-title">
-                          Extracted diagrams ({msg.images.length})
+                          Source screenshots & diagrams ({msg.images.length})
                         </summary>
                         <div className="chat-img-grid">
                           {msg.images.map((img, i) => (
                             <div key={i} className="chat-img-card">
-                              <button
-                                type="button"
-                                className="chat-img-preview"
-                                aria-label={`Expand diagram: ${img.caption}`}
-                                onClick={() => setSelectedImage(img.url)}
-                              >
-                                <img src={img.url} alt={img.caption} />
-                                <span className="chat-img-page-badge">Pg {img.page}</span>
-                              </button>
+                              <SourceVisual image={img} onExpand={setSelectedImage} />
                               <div className="chat-img-caption">{img.caption}</div>
                             </div>
                           ))}
@@ -1677,7 +1683,7 @@ function ChatWorkspace() {
 
                     {/* Sources Pill / Grid */}
                     {msg.sources && msg.sources.length > 0 && (
-                      <details className="chat-section chat-evidence">
+                      <details className="chat-section chat-evidence" open>
                         <summary className="chat-section-title">
                           Sources ({msg.sources.length})
                         </summary>

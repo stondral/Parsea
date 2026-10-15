@@ -7,6 +7,45 @@
 
 ---
 
+## Current upload and scheduling contract (2026-10-15)
+
+This update supersedes conflicting October 10 setup and upload notes below.
+
+- Admin and student uploads share `src/server/routers/uploads.ts`, the canonical R2 and ingestion pipeline, and persisted progress. Students can access only their own jobs and cannot replace library documents or create curriculum folders. Admin-only operations remain role-gated.
+- SHA-256 is computed before upload and verified against downloaded bytes before indexing. Compatible ready indexes are reused only within the same owner, subject/module/topic and material type. Stable request IDs, advisory publication locks and model checks protect retries and concurrent identical uploads.
+- Migration `20261015_000000_resumable_ingestion` adds page checkpoints, content hashes and lease tokens. Completed text/OCR and screenshot keys survive document-transaction rollback. A processing invocation handles at most eight fresh pages, including at most three OCR pages; subsequent invocations reuse completed pages. Lease fencing prevents an expired worker from publishing over its successor. Existing published files/indexes remain intact until atomic replacement succeeds.
+- Both upload entry points start after a subject is known and a short cancellation window. Recent uploads support explicit resume. Browser closure does not erase queued work, but does not itself start a worker.
+- The user selected Vercel-only hosting. `/api/ingestion/run` is a Node GET endpoint with a 300-second declared maximum, constant-time Bearer authentication via a server-only `CRON_SECRET` of at least 32 characters, and at most one checkpoint batch per invocation. The shared queue drain is `src/lib/ingestionQueue.ts`; the operator CLI reuses it. Scheduler examples and activation steps are in `docs/vercel-ingestion-setup.md`. No paid host, cron activation, secret configuration, git push or deployment was performed. Hobby's daily cron is only a backup, not timely unattended processing of large scans.
+- R2 bucket CORS is now applied, preserving existing rules. Production-origin PUT preflight returned 204 with the correct origin, GET/HEAD/PUT and content-type permission. The previous 403/setup-blocked notes below are historical. Use `scripts/configure-r2-cors.ts` and `scripts/check-r2-cors.ts` for controlled maintenance; do not allow arbitrary origins.
+- Circle selection uses the PDF text layer first. An explicit local OCR action reads a scanned region using `src/lib/browserOCR.ts`; browser and server OCR share `src/lib/ocrRecognition.ts` for quality checks, rotations and timeouts. First use downloads worker/language assets. Selected image pixels are not uploaded for OCR; explaining the resulting text remains a separate explicit action. OCR does not interpret diagram shapes.
+- Diagram-only or low-confidence pages in an otherwise readable PDF retain their original visual/checkpoint and are excluded from semantic chunks rather than indexed as OCR noise. Ready-job status explicitly reports pages without searchable text. Entirely unreadable PDFs still fail; rendering failures and timeouts are not silently swallowed. Document 13 exposed this real edge case at physical page 39 and resumed from its 38 saved pages; its final coverage is 43 chunks across 62 physical pages, with 19 pages lacking searchable text. Standalone diagram interpretation remains outside local OCR capability.
+- RAG citation identity includes document ID plus physical page, so separate PDFs with identical titles do not collapse sources. Real rebuilt Logic material returned five source screenshots; a signed PNG was verified. This is not a latency promise: the uncached smoke answer took about 36 seconds, while the cached repeat was immediate.
+- Verification: production Next build, TypeScript, and 104 integration tests pass, including content mismatch, bounded-batch continuation, stale-lease fencing, duplicate-publication handling, and diagram-only pages. Local function traces are 99-101 MB across chat, upload, tRPC and cron, including Linux CPU ONNX and OCR assets; this is not a guarantee of final Vercel bundle size. Four real rotated scan pages yielded readable OCR. Browser visual QA and the final Linux/Vercel deployment are not verified.
+- Full-library audit completed against the configured database: all 13 documents (IDs 3-15) now have descriptive filenames, cloud pointers and compatible `minilm-l6-v2-q8-v1` indexes, totaling 350 semantic chunks with linked source screenshots. Twelve documents were rebuilt; document 8 was already compatible. Document 13 initially failed the old OCR rule and was separately resumed successfully after the diagram-only fix; the initial maintenance command's failure summary is historical, not the final database state. Original local PDFs, document IDs and previous cloud versions were retained. Use `scripts/check-library-cloud.ts` for read-only signed cloud-header checks, and `scripts/resume-upload-job.ts <uuid>` for an explicit operator resume of an existing durable job.
+- Signed R2 range reads for all 13 PDFs returned HTTP 206 with valid PDF headers, including repaired PDF 7. This verifies the current objects, not an undeployed browser route or future upload.
+
+## Current ingestion contract (2026-10-10)
+
+This section supersedes the historical SHA-vector/ONNX hotfix and earlier OCR notes below.
+
+- The only PDF extraction path is `src/lib/pdf-extraction.ts`: PDFParse public APIs, real Node canvas, physical page numbers, no fake DOMMatrix/Path2D/ImageData. Low-text pages use one reused Tesseract worker per document. Low-confidence OCR retries expanded-canvas 90/270/180-degree rotations; unreadable scans, passwords, corrupt files, more than 150 pages, and per-page OCR timeouts fail honestly. Screenshots are staged and released page by page rather than retained in memory.
+- The only embedding path remains `src/lib/embeddings.ts`: actual quantized MiniLM, mean pooling, normalization, 384 finite dimensions, lazy singleton initialization, version `minilm-l6-v2-q8-v1`. NEVER substitute hashes. Cache keys include the model version. Unknown/legacy vectors are excluded until genuinely regenerated.
+- Migration `20261009_010000_semantic_index` adds `embedding_model`, a model-specific cosine HNSW index, GIN FTS, course lookup, and the durable `document_upload_jobs` table. Apply migrations before deploying these callers. `scripts/prepare-ingestion-schema.ts` is the idempotent maintenance equivalent; it was applied to the configured database without deleting or relabelling old chunks.
+- Indexing stages a fresh cloud PDF and screenshots before replacing derived rows. The document, pages, versioned vectors, cloud pointer, and upload-job ready state publish in one parent transaction. Failed replacements retain the previous index/cloud objects; staged unused objects are not automatically purged. Bulk SQL uses the parent transaction. Embeddings run in batches of 16, chunk inserts in batches of 32.
+- Admin uploads in `/administrator` use authenticated tRPC prepare/complete/process/status procedures and direct signed R2 PUTs (25 MB limit). Stable request IDs prevent retry-created duplicate documents; this is not content-hash duplicate detection. Server HEAD size and PDF header are verified before indexing. A <=3 MB authenticated tRPC fallback covers unavailable browser CORS without exceeding Vercel's request limit. Larger PDFs MUST use direct R2.
+- The admin uploader can start automatically after a subject is known, with a short cancellation window. Actual byte transfer and persisted server stages drive progress. Only an atomically committed usable index reports 100%/ready. Recent jobs, failures, resume, replacement, curriculum creation, and user management stay in `/administrator`; native Payload is optional.
+- Queue records survive browser closure, but durable records are NOT an autonomous worker. The browser initiates processing; interrupted jobs can be reclaimed after 15 minutes. Schedule `node --import=tsx/esm scripts/ingestion-worker.ts` on a persistent Node runner for unattended/long OCR jobs. No scheduler or external worker has been provisioned. Vercel request handlers declare 300 seconds, not an unlimited-runtime guarantee.
+- Filename classification remains centralized. Explicit folders win; admins can reuse/create inferred module/topic folders. Every newly uploaded file gets a sanitized subject/module/topic/title filename, including native Payload uploads. Numeric input names never remain `1.pdf`. Replacement keeps the document ID and citation links. Existing old records are not all renamed/re-indexed automatically.
+- Retrieval applies exact course filters before search, ignores incompatible model vectors, and uses consistent OR FTS matching/ranking, RRF, and reranking. Sessions include model and scope; a new named topic must retrieve rather than reuse a previous answer merely because it says “explain.” Deletion/re-index invalidates current/legacy answer and session caches.
+- Source page screenshots are labelled as screenshots, not falsely presented as extracted standalone diagrams. Chat and inline PDF explanations display returned sources/visuals with physical page labels and accessible expansion. Cached answers retain object keys and refresh signed URLs. Saved-chat image failures can request a fresh URL only for keys still linked from public chunks; arbitrary private-object signing is forbidden.
+- The LLM provider currently used by `rag.ts` is NVIDIA's OpenAI-compatible endpoint, with `NVIDIA_MODEL` override. General-knowledge answers without matched material must carry no note sources or images. Existing similarity/negation gates must not be weakened or citations fabricated.
+- Deployment tracing explicitly includes Linux x64 CPU ONNX, canvas wrapper/Linux binding, OCR worker and LSTM WASM assets; excludes other ONNX platforms, GPU binaries, local PDFs and model caches. Local trace measurements are not a proof of the final Linux/Vercel function size or deployment success.
+- Verified against real files: scanned PDF 8 indexed and replaced through the durable job path, same ID on retry, cloud screenshot saved; four sideways scanned pages produce readable OCR after rotation. Existing PDFs other than the smoke-test target still need re-index/re-upload. No production deployment or browser visual test was performed.
+
+### Required production setup before bulk re-upload
+
+The production-origin R2 PUT preflight was tested and returned HTTP 403 without CORS headers. Bucket-management access was not available through the configured object credentials. Apply `docs/r2-cors.json` in Cloudflare R2 bucket settings (add exact preview origins if needed), then re-run `scripts/check-r2-cors.ts`. GET/HEAD CORS is also required for PDF.js circle selection. Until this is configured, only the small-file fallback is usable; do not claim all production uploads are ready. Activate a persistent ingestion worker for unattended large scans. Re-upload/re-index old vectors rather than merely marking their model tag compatible.
+
 ## 1. Core Technology Stack
 
 * **Fullstack Framework**: Next.js 16 (App Router) + TypeScript
@@ -19,9 +58,9 @@
 * **Object Storage**: **Cloudflare R2** (S3-compatible via `@aws-sdk/client-s3` & `@aws-sdk/s3-request-presigner`)
   * Direct student streaming via presigned URLs (Zero server bandwidth bottleneck on Next.js/Payload)
 * **Cache Layer**: **Redis** (`ioredis`) with automatic in-memory fallback (< 1ms hits)
-* **Embeddings**: Local transformer `Xenova/all-MiniLM-L6-v2` (**384 dimensions**, zero paid API cost, local Node.js execution via `@xenova/transformers`)
+* **Embeddings**: Quantized `Xenova/all-MiniLM-L6-v2` (**384 dimensions**), local CPU inference via `@huggingface/transformers`; model-versioned cache and indexes.
 * **Reranker**: Composite Cross-Reranker fusing Reciprocal Rank Fusion (RRF) with exact query term overlap and vector cosine similarity
-* **LLM Engine**: OpenRouter Free Tier (default model: `nex-agi/nex-n2.5-mini:free`, zero cost)
+* **LLM Engine**: NVIDIA's OpenAI-compatible endpoint, configured through `NVIDIA_API_KEY` and optional `NVIDIA_MODEL`. Verify availability/limits with the configured service; do not assume unlimited free inference.
 * **Frontend Markdown & Math**: `react-markdown` + `remark-gfm` + `remark-math` + `rehype-katex` + `katex`
 * **Frontend typography**: Manrope (Google Fonts, weights 400–800), loaded once in the frontend layout with `display=swap` and system sans-serif fallbacks. Do not duplicate the font request with a CSS `@import`.
 
@@ -29,7 +68,7 @@
 
 * Shared colors, navigation, buttons, and focus styles live in `src/app/(frontend)/theme.css`, scoped to `.parsea-theme`: warm ivory, white, muted periwinkle, and deep-blue accents. Landing, chat, notes, login, and signup use this theme; page-specific layout stays in their own stylesheets.
 * The main white hero card uses a thin deep-blue border and restrained shadow for separation from the grid. The navbar is a floating white panel with a matching deep-blue border and a centered navigation tray. On mobile, its logged-out account action is the same muted light-blue “Get started” signup button as desktop, instead of the “Sign in” text link.
-* `src/components/AmbientGrid.tsx` renders a decorative 56px grid with darker muted lines. Hovered cells fade out; pointer events remain available to content. Reduced-motion and coarse-pointer users receive a static grid. Animation runs only while cells are fading and cleans up listeners and frames.
+* `src/components/AmbientGrid.tsx` renders a decorative 56px grid with darker muted lines. Mouse hover and touch/pen contact light cells with a short fade; passive window listeners do not cancel scrolling or clicks. Reduced-motion users receive a static grid. Animation runs only while cells are fading and cleans up listeners and frames.
 * The subject browser retains existing tRPC queries, semester selection, subject links, loading/error/empty states, and the shared upload dialog. The study-chat illustration is explicitly labeled as an example.
 
 ### Chat, library, and multi-PDF upload (updated 2026-10-08)
@@ -97,7 +136,17 @@
 
 ### Production ONNX packaging hotfix (2026-10-09)
 
-* Chat request-time embeddings no longer import native ONNX. `getEmbedding` returns a stable cached 384-dimensional deterministic vector, keeping Vercel functions under the native-binary limit. A future worker can replace this implementation without changing the vector schema.
+* Chat request-time embeddings no longer directly import native ONNX, but the current SHA-derived deterministic vectors are not semantic embeddings and are incompatible with existing MiniLM vectors. Matching dimensions alone does not preserve retrieval correctness. A proper same-model inference path and cache/index migration are still needed; production function-size compliance has not been verified.
+
+### PDF answers and touch navigation (2026-10-09)
+
+* Circle selection now offers explicit Explain/practice actions inside the PDF reader, calling the existing `trpc.chat.ask` mutation and canonical `askRAG`. The selected, editable excerpt and page/title travel in the question; no new LLM, embeddings, storage, or binary proxy implementation was introduced. Reading/selecting alone never sends an AI request.
+* Inline answers render Markdown/math, loading and retryable error states, and additional sources only when returned by retrieval. Changing the excerpt/page/reader invalidates stale answers. Open in Study chat still transfers a local, editable draft without auto-submission.
+* Draw/Scroll controls support touch readers; finishing a touch/pen selection releases the drawing overlay so scrolling resumes. Text-layer selection is supported; scanned images and diagram regions do not have region OCR in this tool. R2 browser CORS remains required for PDF.js, with the standard reader available on failure.
+* Chat has a compact, labelled Minimise/Show navigation toolbar control on all devices, separate from Focus. Hidden navigation is removed from keyboard/accessibility traversal. History remains available from the toolbar, including while navigation is hidden.
+* Navbar Get started hover explicitly retains a light muted background and contrasting deep-blue text; its scoped hover selector takes precedence over generic primary-button hover styles.
+* Known pre-existing retrieval limitation: the ONNX hotfix currently produces SHA-derived pseudo-random vectors, not semantic MiniLM embeddings. These are incompatible with old model vectors and do not preserve semantic search. This interaction change does not repair that pipeline or verify production answer quality.
+* Verification: isolated component tests cover inline PDF request/draft/error/stale-result handling, grid mouse/touch/pen and reduced motion, and navigation hide/restore. No live browser or production end-to-end verification is claimed.
 
 ## 2. Global Rules & Invariants for AI Agents
 
@@ -128,8 +177,8 @@
 ### Rule 3: Redis-First Caching (LightSpeed Performance)
 * All computationally expensive operations (text embeddings, vector queries, LLM answers) MUST check the Redis cache layer before calling remote APIs or heavy pipelines.
 * Use `getOrSetCache(key, fetchFn, ttlSeconds)` for atomic cache-aside operations.
-* Embeddings cache key format: `emb:<sha256(text)[:16]>` (TTL: 7 days)
-* RAG answer cache key format: `rag:v2:<sha256({question, filters})[:16]>` (TTL: 24 hours)
+* Embeddings cache key format: `emb:minilm-l6-v2-q8-v1:<hash>` (TTL: 7 days).
+* RAG answer cache: `rag:v4:<hash>`, including model, question, filters, conversation context, and recent history (TTL: 24 hours).
 
 ### Rule 4: Bulletproof 2-Gate Retrieval Policy
 Never return false citations to students:

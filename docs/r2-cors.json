@@ -1,0 +1,9 @@
+[
+  {
+    "AllowedOrigins": ["https://parsealms.vercel.app", "http://localhost:3000", "http://localhost:3010"],
+    "AllowedMethods": ["GET", "HEAD", "PUT"],
+    "AllowedHeaders": ["content-type", "range"],
+    "ExposeHeaders": ["ETag", "Content-Length", "Content-Range", "Accept-Ranges"],
+    "MaxAgeSeconds": 3600
+  }
+]

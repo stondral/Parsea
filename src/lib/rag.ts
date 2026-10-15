@@ -1,7 +1,7 @@
 import { getPayload } from 'payload'
 import config from '@/payload.config'
 import { ChatOpenAI } from '@langchain/openai'
-import { getEmbedding } from './embeddings'
+import { getEmbedding, EMBEDDING_MODEL } from './embeddings'
 import { getCache, setCache, getOrSetCache, hashKey } from './redis'
 import { getPresignedDownloadUrl } from './r2'
 import { sql } from 'drizzle-orm'
@@ -24,9 +24,20 @@ export interface SourceCitation {
 
 export interface CitedImage {
   url: string
+  storageKey?: string
   caption: string
   page: number
   document: string
+}
+
+// Redis answers outlive signed URLs. Persist the object key and sign again at
+// response time rather than serving an expired screenshot from a cached answer.
+async function refreshImageURLs(images: CitedImage[]): Promise<CitedImage[]> {
+  return Promise.all(
+    images.map(async (image) =>
+      image.storageKey ? { ...image, url: await getPresignedDownloadUrl(image.storageKey) } : image,
+    ),
+  )
 }
 
 export interface ChatMessage {
@@ -139,31 +150,28 @@ function rerankCandidates(candidates: RankedChunk[], query: string): RankedChunk
 export function shouldRetrieveContext(query: string): boolean {
   const q = query.trim().toLowerCase()
   if (!q) return false
-  return !/^(hi|hello|hey|hiya|good morning|good afternoon|good evening|thanks|thank you|thx|yo|who are you|what can you do|how are you)[.!?\s]*$/i.test(q)
+  return !/^(hi|hello|hey|hiya|good morning|good afternoon|good evening|thanks|thank you|thx|yo|who are you|what can you do|how are you)[.!?\s]*$/i.test(
+    q,
+  )
 }
 
 export function isElaborationQuery(query: string): boolean {
   const q = query.trim().toLowerCase()
-
-  const followUpPatterns = [
-    /\b(explain|elaborate|clarify|simplify)\b/i,
-    /\b(example|instance|sample|illustration)\b/i,
-    /\b(simpler|simple words|more simple|layman|easy terms)\b/i,
-    /\b(summarize|summary|bullet points|tldr|takeaways)\b/i,
-    /\b(code|python|pseudocode|algorithm|implementation|function)\b/i,
-    /\b(why|how come|how so|prove|proof|derivation)\b/i,
-    /\b(practice|quiz|problem|exercise|question)\b/i,
-    /\b(table|compare|difference|tabular)\b/i,
-    /\b(what about|what if|how about)\b/i,
-    /\b(step \d+|equation \d+|condition \d+|first|second|third|last)\b/i,
-    /\b(more detail|further detail|expand on)\b/i,
-    /\b(what does this mean|what do you mean)\b/i,
-  ]
-
-  if (followUpPatterns.some((pattern) => pattern.test(q))) {
+  // "Explain quantum mechanics" is a new question, not permission to reuse
+  // the previous Logic PDF. Only clearly referential follow-ups bypass search.
+  if (
+    /^(please\s+)?(explain|elaborate|clarify|simplify|summarize|expand)(\s+(it|this|that))?(\s+(again|further|more|simply|in detail|in simple words))?[.!?]*$/.test(
+      q,
+    )
+  )
     return true
-  }
-
+  if (
+    /^(show|give)( me)? (an? |some |more )?(example|examples|practice questions|summary|table)[.!?]*$/.test(
+      q,
+    )
+  )
+    return true
+  if (/^(why|how so|more detail|tldr|make it simpler|what do you mean)[.!?]*$/.test(q)) return true
   const wordCount = q.split(/\s+/).length
   const pronounPattern = /\b(it|this|that|these|those|its|their|the above)\b/i
   if (wordCount <= 14 && pronounPattern.test(q)) {
@@ -188,34 +196,36 @@ export function isElaborationQuery(query: string): boolean {
 export async function askRAG(
   question: string,
   filters?: AcademicFilters,
-  options?: ConversationOptions
+  options?: ConversationOptions,
 ): Promise<RAGResult> {
   const startTime = performance.now()
   const trimmed = question.trim()
 
   const conversationId = options?.conversationId
   const history = options?.history || []
-  const sessionKey = conversationId ? `session:${conversationId}:context` : null
+  const sessionKey = conversationId
+    ? `session:${EMBEDDING_MODEL}:${conversationId}:context:${hashKey('scope', JSON.stringify(filters || {}))}`
+    : null
 
   // 1. Check for active session in Redis
   const activeSession = sessionKey ? await getCache<SessionContext>(sessionKey) : null
 
   // Determine if this turn should bypass fresh vector/keyword retrieval
   const canBypassRetrieval = Boolean(
-    activeSession &&
-    history.length > 0 &&
-    isElaborationQuery(trimmed)
+    activeSession && history.length > 0 && isElaborationQuery(trimmed),
   )
 
   // Cache key includes question, filters, conversation turn, and bypass status
   const cacheKeyPayload = JSON.stringify({
+    model: EMBEDDING_MODEL,
+    history: history.slice(-6),
     q: trimmed,
     f: filters || {},
     cid: conversationId || '',
     lastQ: activeSession?.lastQuestion || '',
     bypassed: canBypassRetrieval,
   })
-  const cacheKey = hashKey('rag:v3', cacheKeyPayload)
+  const cacheKey = hashKey('rag:v4', cacheKeyPayload)
 
   // 2. Check Redis cache first for Lightspeed instant retrieval (< 10ms)
   const { data: cachedResult, cached } = await getOrSetCache<{
@@ -287,7 +297,10 @@ Use the study material context as supporting evidence when it is present and rel
             history: historyContext,
             question: trimmed,
           })
-          answer = typeof response.content === 'string' ? response.content : JSON.stringify(response.content)
+          answer =
+            typeof response.content === 'string'
+              ? response.content
+              : JSON.stringify(response.content)
         } catch (llmError: any) {
           console.warn('LLM call failed during retrieval bypass:', llmError?.message)
           answer = 'Sorry, the AI model is temporarily unavailable. Please try again in a moment.'
@@ -314,7 +327,7 @@ Use the study material context as supporting evidence when it is present and rel
               ...activeSession,
               lastQuestion: trimmed,
             },
-            3600
+            3600,
           )
         }
 
@@ -361,16 +374,21 @@ Use the study material context as supporting evidence when it is present and rel
       const branchClause = filterBranch ? sql`AND LOWER(c.branch) = LOWER(${filterBranch})` : sql``
       const semesterClause = filterSemester ? sql`AND c.semester = ${filterSemester}` : sql``
       const subjectClause = filterSubject
-        ? sql`AND (LOWER(c.subject_name) LIKE LOWER(${`%${filterSubject}%`}) OR LOWER(d.name) LIKE LOWER(${`%${filterSubject}%`}))`
+        ? sql`AND LOWER(c.subject_name) = LOWER(${filterSubject})`
         : sql``
-      const moduleClause = filterModule ? sql`AND LOWER(c.module_name) LIKE LOWER(${`%${filterModule}%`})` : sql``
-      const topicClause = filterTopic ? sql`AND LOWER(c.topic_name) LIKE LOWER(${`%${filterTopic}%`})` : sql``
+      const moduleClause = filterModule
+        ? sql`AND (LOWER(c.module_name) = LOWER(${filterModule}) OR c.module_number = ${filterModule})`
+        : sql``
+      const topicClause = filterTopic
+        ? sql`AND (LOWER(c.topic_name) = LOWER(${filterTopic}) OR c.topic_number = ${filterTopic})`
+        : sql``
 
       // ─────────────────────────────────────────────────────────
       // HYBRID RETRIEVAL STEP 1 & 2: Vector Search (HNSW) + Keyword Search (GIN) in parallel
       // ─────────────────────────────────────────────────────────
-      const vectorPromise = shouldRetrieve && questionEmbedding
-        ? db!.execute(sql`
+      const vectorPromise =
+        shouldRetrieve && questionEmbedding
+          ? db!.execute(sql`
         SELECT c.id, c.text, c.page_number, c.document_id, c.chapter, c.subject_name, c.branch, c.semester,
                c.has_image, c.image_url, c.image_caption,
                d.name AS document_name,
@@ -378,6 +396,7 @@ Use the study material context as supporting evidence when it is present and rel
         FROM chunks c
         LEFT JOIN documents d ON c.document_id = d.id
         WHERE c.embedding IS NOT NULL
+        AND c.embedding_model = ${EMBEDDING_MODEL}
         ${branchClause}
         ${semesterClause}
         ${subjectClause}
@@ -386,7 +405,7 @@ Use the study material context as supporting evidence when it is present and rel
         ORDER BY c.embedding <=> ${vectorStr}::vector
         LIMIT 25
       `)
-        : Promise.resolve({ rows: [] })
+          : Promise.resolve({ rows: [] })
 
       let keywordPromise: Promise<any> = Promise.resolve({ rows: [] })
       if (shouldRetrieve && cleanKeywords.length > 0) {
@@ -394,16 +413,17 @@ Use the study material context as supporting evidence when it is present and rel
           SELECT c.id, c.text, c.page_number, c.document_id, c.chapter, c.subject_name, c.branch, c.semester,
                  c.has_image, c.image_url, c.image_caption,
                  d.name AS document_name,
-                 ts_rank(to_tsvector('english', c.text), plainto_tsquery('english', ${cleanKeywords})) AS keyword_rank
+                 ts_rank(to_tsvector('english', c.text), websearch_to_tsquery('english', ${cleanKeywords.split(/\s+/).join(' OR ')})) AS keyword_rank
           FROM chunks c
           LEFT JOIN documents d ON c.document_id = d.id
-          WHERE to_tsvector('english', c.text) @@ plainto_tsquery('english', ${cleanKeywords})
+          WHERE c.embedding_model = ${EMBEDDING_MODEL}
+          AND to_tsvector('english', c.text) @@ websearch_to_tsquery('english', ${cleanKeywords.split(/\s+/).join(' OR ')})
           ${branchClause}
           ${semesterClause}
           ${subjectClause}
           ${moduleClause}
           ${topicClause}
-          ORDER BY ts_rank(to_tsvector('english', c.text), plainto_tsquery('english', ${cleanKeywords})) DESC
+          ORDER BY keyword_rank DESC
           LIMIT 25
         `)
       }
@@ -476,23 +496,29 @@ Use the study material context as supporting evidence when it is present and rel
       // ─────────────────────────────────────────────────────────
       const rawCandidates = Array.from(candidateMap.values())
       const reranked = rerankCandidates(rawCandidates, retrievalQuery)
-      const topChunks = reranked.slice(0, 5)
+      const topChunks = reranked
+        .filter((c) => c.vectorSimilarity >= 0.35 || c.hasKeywordMatch)
+        .slice(0, 5)
 
       // GATE 1: Keep answers useful even when the student asks beyond the uploaded notes.
       // Retrieval-backed answers still require a meaningful vector or keyword match; otherwise
       // the model receives an explicit no-context signal and answers from general knowledge.
       const bestMatch = topChunks[0]
       const hasMaterialMatch = Boolean(
-        bestMatch && (bestMatch.vectorSimilarity >= 0.35 || bestMatch.hasKeywordMatch)
+        bestMatch && (bestMatch.vectorSimilarity >= 0.35 || bestMatch.hasKeywordMatch),
       )
 
       // Deduplicate sources with clickable viewer URLs
       const contextStr = hasMaterialMatch
-        ? topChunks.map((c) => `[Page ${c.page_number}] ${c.text}`).join('\n\n')
+        ? topChunks
+            .map(
+              (c) => `[${c.document_name}; PDF ${c.document_id}; Page ${c.page_number}] ${c.text}`,
+            )
+            .join('\n\n')
         : ''
       const sourcesMap = new Map<string, SourceCitation>()
       for (const c of hasMaterialMatch ? topChunks : []) {
-        const key = `${c.document_name}-${c.page_number}`
+        const key = `${c.document_id}-${c.page_number}`
         if (!sourcesMap.has(key)) {
           sourcesMap.set(key, {
             document: c.document_name,
@@ -517,6 +543,7 @@ Use the study material context as supporting evidence when it is present and rel
             const presigned = await getPresignedDownloadUrl(c.image_url)
             images.push({
               url: presigned,
+              storageKey: c.image_url,
               caption: c.image_caption || `Diagram & Visual Slide (Page ${c.page_number})`,
               page: c.page_number,
               document: c.document_name,
@@ -570,7 +597,8 @@ Use the study material context as supporting evidence when it is present and rel
           history: historyContext,
           question: trimmed,
         })
-        answer = typeof response.content === 'string' ? response.content : JSON.stringify(response.content)
+        answer =
+          typeof response.content === 'string' ? response.content : JSON.stringify(response.content)
       } catch (llmError: any) {
         console.warn('LLM call failed:', llmError?.message)
         answer = 'Sorry, the AI model is temporarily unavailable. Please try again in a moment.'
@@ -604,7 +632,7 @@ Use the study material context as supporting evidence when it is present and rel
             lastQuestion: trimmed,
             diagramsContext,
           },
-          3600
+          3600,
         )
       }
 
@@ -615,13 +643,14 @@ Use the study material context as supporting evidence when it is present and rel
         retrievalBypassed: false,
       }
     },
-    86400 // Cache for 24 hours
+    86400, // Cache for 24 hours
   )
 
   const latencyMs = Math.round(performance.now() - startTime)
 
   return {
     ...cachedResult,
+    images: await refreshImageURLs(cachedResult.images),
     cached,
     latencyMs,
   }
@@ -630,40 +659,42 @@ Use the study material context as supporting evidence when it is present and rel
 /**
  * Canonical Streaming RAG Generator for Parsea.
  * Yields:
- * 1. Immediate 'metadata' event (sources + Cloudflare R2 diagram URLs) in < 80ms.
- * 2. Incremental 'token' events from LLM as words are generated (Time-to-First-Token in ~250-300ms).
+ * 1. Metadata after retrieval (sources + Cloudflare R2 screenshot URLs).
+ * 2. Incremental token events as the LLM generates its answer. Cold latency varies.
  * 3. Final 'done' event with completed answer, latency, and caches in Redis for repeat queries.
  */
 export async function* askRAGStream(
   question: string,
   filters?: AcademicFilters,
-  options?: ConversationOptions
+  options?: ConversationOptions,
 ): AsyncGenerator<StreamEvent> {
   const startTime = performance.now()
   const trimmed = question.trim()
 
   const conversationId = options?.conversationId
   const history = options?.history || []
-  const sessionKey = conversationId ? `session:${conversationId}:context` : null
+  const sessionKey = conversationId
+    ? `session:${EMBEDDING_MODEL}:${conversationId}:context:${hashKey('scope', JSON.stringify(filters || {}))}`
+    : null
 
   // 1. Check for active session in Redis
   const activeSession = sessionKey ? await getCache<SessionContext>(sessionKey) : null
 
   // Determine if this turn should bypass fresh vector/keyword retrieval
   const canBypassRetrieval = Boolean(
-    activeSession &&
-    history.length > 0 &&
-    isElaborationQuery(trimmed)
+    activeSession && history.length > 0 && isElaborationQuery(trimmed),
   )
 
   const cacheKeyPayload = JSON.stringify({
+    model: EMBEDDING_MODEL,
+    history: history.slice(-6),
     q: trimmed,
     f: filters || {},
     cid: conversationId || '',
     lastQ: activeSession?.lastQuestion || '',
     bypassed: canBypassRetrieval,
   })
-  const cacheKey = hashKey('rag:v3', cacheKeyPayload)
+  const cacheKey = hashKey('rag:v4', cacheKeyPayload)
 
   // 1. Check Redis Cache first (< 5ms)
   const cached = await getCache<{
@@ -674,6 +705,7 @@ export async function* askRAGStream(
   }>(cacheKey)
 
   if (cached) {
+    cached.images = await refreshImageURLs(cached.images)
     const latencyMs = Math.round(performance.now() - startTime)
     yield {
       type: 'metadata',
@@ -733,7 +765,7 @@ export async function* askRAGStream(
     yield {
       type: 'metadata',
       sources: activeSession.sources,
-      images: activeSession.images,
+      images: await refreshImageURLs(activeSession.images),
       cached: false,
       retrievalBypassed: true,
     }
@@ -798,7 +830,7 @@ Use the study material context as supporting evidence when it is present and rel
     ]
     const isNegative = negationKeywords.some((p) => fullAnswer.toLowerCase().includes(p))
     const finalSources = isNegative ? [] : activeSession.sources
-    const finalImages = isNegative ? [] : activeSession.images
+    const finalImages = isNegative ? [] : await refreshImageURLs(activeSession.images)
 
     if (sessionKey) {
       await setCache(
@@ -807,14 +839,14 @@ Use the study material context as supporting evidence when it is present and rel
           ...activeSession,
           lastQuestion: trimmed,
         },
-        3600
+        3600,
       )
     }
 
     await setCache(
       cacheKey,
       { answer: fullAnswer, sources: finalSources, images: finalImages, retrievalBypassed: true },
-      86400
+      86400,
     )
 
     yield {
@@ -859,14 +891,19 @@ Use the study material context as supporting evidence when it is present and rel
   const branchClause = filterBranch ? sql`AND LOWER(c.branch) = LOWER(${filterBranch})` : sql``
   const semesterClause = filterSemester ? sql`AND c.semester = ${filterSemester}` : sql``
   const subjectClause = filterSubject
-    ? sql`AND (LOWER(c.subject_name) LIKE LOWER(${`%${filterSubject}%`}) OR LOWER(d.name) LIKE LOWER(${`%${filterSubject}%`}))`
+    ? sql`AND LOWER(c.subject_name) = LOWER(${filterSubject})`
     : sql``
-  const moduleClause = filterModule ? sql`AND LOWER(c.module_name) LIKE LOWER(${`%${filterModule}%`})` : sql``
-  const topicClause = filterTopic ? sql`AND LOWER(c.topic_name) LIKE LOWER(${`%${filterTopic}%`})` : sql``
+  const moduleClause = filterModule
+    ? sql`AND (LOWER(c.module_name) = LOWER(${filterModule}) OR c.module_number = ${filterModule})`
+    : sql``
+  const topicClause = filterTopic
+    ? sql`AND (LOWER(c.topic_name) = LOWER(${filterTopic}) OR c.topic_number = ${filterTopic})`
+    : sql``
 
   // 4. Parallel Vector Search (HNSW) + Keyword Search (GIN)
-  const vectorPromise = shouldRetrieve && questionEmbedding
-    ? db!.execute(sql`
+  const vectorPromise =
+    shouldRetrieve && questionEmbedding
+      ? db!.execute(sql`
     SELECT c.id, c.text, c.page_number, c.document_id, c.chapter, c.subject_name, c.branch, c.semester,
            c.has_image, c.image_url, c.image_caption,
            d.name AS document_name,
@@ -874,6 +911,7 @@ Use the study material context as supporting evidence when it is present and rel
     FROM chunks c
     LEFT JOIN documents d ON c.document_id = d.id
     WHERE c.embedding IS NOT NULL
+    AND c.embedding_model = ${EMBEDDING_MODEL}
     ${branchClause}
     ${semesterClause}
     ${subjectClause}
@@ -882,7 +920,7 @@ Use the study material context as supporting evidence when it is present and rel
     ORDER BY c.embedding <=> ${vectorStr}::vector
     LIMIT 25
   `)
-    : Promise.resolve({ rows: [] })
+      : Promise.resolve({ rows: [] })
 
   let keywordPromise: Promise<any> = Promise.resolve({ rows: [] })
   if (shouldRetrieve && cleanKeywords.length > 0) {
@@ -890,16 +928,17 @@ Use the study material context as supporting evidence when it is present and rel
       SELECT c.id, c.text, c.page_number, c.document_id, c.chapter, c.subject_name, c.branch, c.semester,
              c.has_image, c.image_url, c.image_caption,
              d.name AS document_name,
-             ts_rank(to_tsvector('english', c.text), plainto_tsquery('english', ${cleanKeywords})) AS keyword_rank
+             ts_rank(to_tsvector('english', c.text), websearch_to_tsquery('english', ${cleanKeywords.split(/\s+/).join(' OR ')})) AS keyword_rank
       FROM chunks c
       LEFT JOIN documents d ON c.document_id = d.id
-      WHERE to_tsvector('english', c.text) @@ plainto_tsquery('english', ${cleanKeywords})
+      WHERE c.embedding_model = ${EMBEDDING_MODEL}
+      AND to_tsvector('english', c.text) @@ websearch_to_tsquery('english', ${cleanKeywords.split(/\s+/).join(' OR ')})
       ${branchClause}
       ${semesterClause}
       ${subjectClause}
       ${moduleClause}
       ${topicClause}
-      ORDER BY ts_rank(to_tsvector('english', c.text), plainto_tsquery('english', ${cleanKeywords})) DESC
+      ORDER BY keyword_rank DESC
       LIMIT 25
     `)
   }
@@ -967,21 +1006,25 @@ Use the study material context as supporting evidence when it is present and rel
   // 6. Composite Reranker
   const rawCandidates = Array.from(candidateMap.values())
   const reranked = rerankCandidates(rawCandidates, retrievalQuery)
-  const topChunks = reranked.slice(0, 5)
+  const topChunks = reranked
+    .filter((c) => c.vectorSimilarity >= 0.35 || c.hasKeywordMatch)
+    .slice(0, 5)
 
   // Gate 1: keep out-of-syllabus questions useful without fabricating note citations.
   const bestMatch = topChunks[0]
   const hasMaterialMatch = Boolean(
-    bestMatch && (bestMatch.vectorSimilarity >= 0.35 || bestMatch.hasKeywordMatch)
+    bestMatch && (bestMatch.vectorSimilarity >= 0.35 || bestMatch.hasKeywordMatch),
   )
 
   // Deduplicate sources
   const contextStr = hasMaterialMatch
-    ? topChunks.map((c) => `[Page ${c.page_number}] ${c.text}`).join('\n\n')
+    ? topChunks
+        .map((c) => `[${c.document_name}; PDF ${c.document_id}; Page ${c.page_number}] ${c.text}`)
+        .join('\n\n')
     : ''
   const sourcesMap = new Map<string, SourceCitation>()
   for (const c of hasMaterialMatch ? topChunks : []) {
-    const key = `${c.document_name}-${c.page_number}`
+    const key = `${c.document_id}-${c.page_number}`
     if (!sourcesMap.has(key)) {
       sourcesMap.set(key, {
         document: c.document_name,
@@ -1004,6 +1047,7 @@ Use the study material context as supporting evidence when it is present and rel
         const presigned = await getPresignedDownloadUrl(c.image_url)
         images.push({
           url: presigned,
+          storageKey: c.image_url,
           caption: c.image_caption || `Diagram & Visual Slide (Page ${c.page_number})`,
           page: c.page_number,
           document: c.document_name,
@@ -1077,7 +1121,6 @@ Use the study material context as supporting evidence when it is present and rel
     yield { type: 'token', token: fullAnswer }
   }
 
-
   // Gate 2: Negation Check
   const negationKeywords = [
     'do not contain',
@@ -1105,12 +1148,16 @@ Use the study material context as supporting evidence when it is present and rel
         lastQuestion: trimmed,
         diagramsContext,
       },
-      3600
+      3600,
     )
   }
 
   // Cache full response in Redis for future requests
-  await setCache(cacheKey, { answer: fullAnswer, sources: finalSources, images: finalImages, retrievalBypassed: false }, 86400)
+  await setCache(
+    cacheKey,
+    { answer: fullAnswer, sources: finalSources, images: finalImages, retrievalBypassed: false },
+    86400,
+  )
 
   const latencyMs = Math.round(performance.now() - startTime)
 
@@ -1124,4 +1171,3 @@ Use the study material context as supporting evidence when it is present and rel
     latencyMs,
   }
 }
-

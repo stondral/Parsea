@@ -2,6 +2,24 @@ import { z } from 'zod'
 import { router, publicProcedure } from '../trpc'
 
 export const chatRouter = router({
+  refreshImage: publicProcedure
+    .input(z.object({ storageKey: z.string().min(1).max(2048) }))
+    .query(async ({ input }) => {
+      const { getAppPayload } = await import('@/lib/payloadAuth')
+      const payload = await getAppPayload()
+      // Never turn this into an arbitrary private-object signing endpoint.
+      const linked = await payload.find({
+        collection: 'chunks',
+        depth: 0,
+        limit: 1,
+        overrideAccess: false,
+        where: { imageUrl: { equals: input.storageKey } },
+        select: { imageUrl: true },
+      })
+      if (!linked.docs[0]) return null
+      const { getPresignedDownloadUrl } = await import('@/lib/r2')
+      return { url: await getPresignedDownloadUrl(input.storageKey) }
+    }),
   ask: publicProcedure
     .input(
       z.object({

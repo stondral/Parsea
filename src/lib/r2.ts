@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3'
+import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 
 const R2_ENDPOINT = process.env.R2_ENDPOINT || ''
@@ -48,11 +48,30 @@ export async function getPresignedDownloadUrl(
   key: string,
   bucket = R2_BUCKET,
   expiresInSeconds = 3600, // 1 hour default
+  downloadFilename?: string,
 ): Promise<string> {
   const command = new GetObjectCommand({
     Bucket: bucket,
     Key: key,
+    ...(downloadFilename
+      ? {
+          ResponseContentDisposition: `attachment; filename="Study_notes.pdf"; filename*=UTF-8''${encodeURIComponent(downloadFilename).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)}`,
+        }
+      : {}),
   })
 
   return await getSignedUrl(r2Client, command, { expiresIn: expiresInSeconds })
+}
+
+export async function getPresignedUploadUrl(key: string): Promise<string> {
+  return getSignedUrl(
+    r2Client,
+    new PutObjectCommand({ Bucket: R2_BUCKET, Key: key, ContentType: 'application/pdf' }),
+    { expiresIn: 900 },
+  )
+}
+
+export async function getR2ObjectSize(key: string): Promise<number> {
+  const object = await r2Client.send(new HeadObjectCommand({ Bucket: R2_BUCKET, Key: key }))
+  return object.ContentLength || 0
 }

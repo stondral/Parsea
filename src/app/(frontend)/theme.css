@@ -94,9 +94,10 @@
   font-weight: 500;
   border-radius: 10px;
 }
-.parsea-theme .navbar .btn-primary:hover {
+.parsea-theme .navbar .btn-primary:hover:not(:disabled) {
   background: #dce5f7;
   border-color: #c3d0ec;
+  color: #304779;
 }
 .parsea-theme .navbar-signin {
   font-weight: 500;

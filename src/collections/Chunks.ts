@@ -6,6 +6,7 @@ export const Chunks: CollectionConfig = {
     read: () => true,
   },
   fields: [
+    { name: 'embeddingModel', type: 'text', admin: { readOnly: true } },
     {
       name: 'document',
       type: 'relationship',

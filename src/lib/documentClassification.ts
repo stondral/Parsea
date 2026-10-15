@@ -12,6 +12,7 @@ export interface DownloadFilenameParts {
   topicNumber?: string
   topicName?: string
   originalFilename: string
+  title?: string
 }
 
 /**
@@ -26,8 +27,12 @@ export function classifyDocumentFilename(filename: string): FilenameClassificati
     .trim()
 
   const moduleMatch = stem.match(/(?:module|mod|unit)\s*(\d+(?:\.\d+)?)/i)
-  const topicMatch = stem.match(/(?:topic|chapter|sub(?:\s|-)?module|unit)\s*(\d+\.\d+)(?:\s*[:\-]\s*([^]+))?/i)
-  const implicitTopicMatch = stem.match(/(?:module|mod|unit)\s*\d+\s+[^\d]*?(\d+\.\d+)\s*[:\-]?\s*([^]*)/i)
+  const topicMatch = stem.match(
+    /(?:topic|chapter|sub(?:\s|-)?module|unit)\s*(\d+\.\d+)(?:\s*[:\-]\s*([^]+))?/i,
+  )
+  const implicitTopicMatch = stem.match(
+    /(?:module|mod|unit)\s*\d+\s+[^\d]*?(\d+\.\d+)\s*[:\-]?\s*([^]*)/i,
+  )
 
   const topicNumber = topicMatch?.[1] || implicitTopicMatch?.[1]
   const topicTitle = (topicMatch?.[2] || implicitTopicMatch?.[2])?.trim() || undefined
@@ -42,16 +47,24 @@ export function classifyDocumentFilename(filename: string): FilenameClassificati
 
 /** A readable, stable filename for browser downloads and R2 storage. */
 export function buildDownloadFilename(parts: DownloadFilenameParts): string {
-  const extension = /\.pdf$/i.test(parts.originalFilename) ? '.pdf' : ''
   const labels = [parts.subjectName]
-  if (parts.moduleNumber) labels.push(`Module ${parts.moduleNumber}${parts.moduleName ? ` ${parts.moduleName}` : ''}`)
-  if (parts.topicNumber) labels.push(`Topic ${parts.topicNumber}${parts.topicName ? ` ${parts.topicName}` : ''}`)
+  if (parts.moduleNumber)
+    labels.push(`Module ${parts.moduleNumber}${parts.moduleName ? ` ${parts.moduleName}` : ''}`)
+  if (parts.topicNumber)
+    labels.push(`Topic ${parts.topicNumber}${parts.topicName ? ` ${parts.topicName}` : ''}`)
 
   const fallback = parts.originalFilename.replace(/\.pdf$/i, '')
-  const readable = labels.filter(Boolean).join(' — ') || fallback
-  return `${readable
-    .replace(/[<>:"/\\|?*]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 180)}${extension || '.pdf'}`
+  const title = parts.title?.trim().replace(/\.pdf$/i, '') || fallback
+  if (title && !/^\d+$/.test(title)) labels.push(title)
+  else labels.push(title ? `Study notes ${title}` : 'Study notes')
+  const readable = labels.filter(Boolean).join('_')
+  return `${
+    readable
+      .normalize('NFKC')
+      .replace(/[<>:"/\\|?*\x00-\x1f]+/g, '')
+      .replace(/[\s—]+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^[._]+|[._]+$/g, '')
+      .slice(0, 170) || 'Study_notes'
+  }.pdf`
 }

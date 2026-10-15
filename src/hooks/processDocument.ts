@@ -1,399 +1,230 @@
 import type { CollectionAfterChangeHook } from 'payload'
-import { deleteDocumentDependents } from '@/hooks/deleteDocumentDependents'
-import { getEmbedding } from '@/lib/embeddings'
+import { deleteDocumentDependents } from './deleteDocumentDependents'
+import { getEmbedding, EMBEDDING_MODEL } from '@/lib/embeddings'
+import { extractPDF } from '@/lib/pdf-extraction'
 import { uploadToR2, getPresignedDownloadUrl, R2_BUCKET } from '@/lib/r2'
-import { extractTextFromImage } from '@/lib/ocr'
-import path from 'path'
-import fs from 'fs'
-import { sql } from 'drizzle-orm'
 import { buildDocumentStoragePaths } from '@/lib/documentStorage'
+import path from 'node:path'
+import fs from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { sql } from 'drizzle-orm'
+import { DuplicateDocument, IngestionPending } from '@/lib/ingestionControl'
+import type { ExtractedPDFPage } from '@/lib/pdf-extraction'
 
-// Polyfill browser globals needed by pdfjs-dist / pdf-parse if not already present in Node runtime
-if (typeof (globalThis as any).DOMMatrix === 'undefined') {
-  class DOMMatrixFallback {
-    a = 1; b = 0; c = 0; d = 1; e = 0; f = 0
-    m11 = 1; m12 = 0; m13 = 0; m14 = 0
-    m21 = 0; m22 = 1; m23 = 0; m24 = 0
-    m31 = 0; m32 = 0; m33 = 1; m34 = 0
-    m41 = 0; m42 = 0; m43 = 0; m44 = 1
-    is2D = true
-    isIdentity = true
-    translate() { return this }
-    scale() { return this }
-    multiply() { return this }
-    preMultiplySelf() { return this }
-    invertSelf() { return this }
-    setTransform() { return this }
-  }
-  ;(globalThis as any).DOMMatrix = DOMMatrixFallback
-}
-if (typeof (globalThis as any).Path2D === 'undefined') {
-  class Path2DFallback {
-    addPath() {}
-    closePath() {}
-  }
-  ;(globalThis as any).Path2D = Path2DFallback
-}
-if (typeof (globalThis as any).ImageData === 'undefined') {
-  class ImageDataFallback {
-    data = new Uint8ClampedArray(0)
-    width = 0
-    height = 0
-  }
-  ;(globalThis as any).ImageData = ImageDataFallback
-}
-
-
+/** Canonical synchronous indexing. A successful upload means a usable index. */
 export const processDocument: CollectionAfterChangeHook = async ({
   doc,
   req,
   operation,
   context,
 }) => {
-  if ((operation === 'create' || operation === 'update') && doc.filename) {
-    const isPdf =
-      doc.mimeType === 'application/pdf' ||
-      doc.mime_type === 'application/pdf' ||
-      doc.filename.toLowerCase().endsWith('.pdf')
-
-    if (isPdf) {
+  if (!doc.filename || !doc.filename.toLowerCase().endsWith('.pdf')) return doc
+  const transactionID = await req.transactionID
+  const db = transactionID
+    ? (req.payload.db.sessions?.[String(transactionID)]?.db as any)
+    : (req.payload.db as any).drizzle
+  if (!db) throw new Error('Document transaction unavailable.')
+  const jobId = typeof context?.uploadJobId === 'string' ? context.uploadJobId : undefined
+  const lease = typeof context?.uploadLeaseToken === 'string' ? context.uploadLeaseToken : undefined
+  const checkpointDB = (req.payload.db as any).drizzle
+  const progress = async (percent: number, stage: string) => {
+    req.payload.logger.info(stage)
+    if (jobId)
+      await checkpointDB.execute(sql`UPDATE document_upload_jobs
+      SET progress = GREATEST(progress, ${percent}), stage = ${stage}, updated_at = now() WHERE id = ${jobId}::uuid AND status = 'running'
+      AND lease_token = ${lease || null}::uuid`)
+  }
+  try {
+    let buffer: Buffer
+    if (Buffer.isBuffer(context?.documentSource)) buffer = context.documentSource
+    else if (req.file?.data) buffer = Buffer.from(req.file.data)
+    else if (doc.storageKey) {
+      const url = await getPresignedDownloadUrl(doc.storageKey, doc.r2Bucket || R2_BUCKET)
+      const response = await fetch(url, { signal: AbortSignal.timeout(30_000) })
+      if (!response.ok) throw new Error('Stored PDF could not be read. Replace it from Materials.')
+      buffer = Buffer.from(await response.arrayBuffer())
+    } else {
+      const root = path.resolve(process.cwd(), 'media/documents')
+      const filePath = path.resolve(root, doc.filename)
+      if (!filePath.startsWith(root + path.sep)) throw new Error('Invalid PDF file path.')
       try {
-        req.payload.logger.info(`Starting high-speed multimodal ingestion for document ${doc.id}: ${doc.filename}`)
-
-        // Fix pdfjs-dist conflict: Payload CMS adds an enumerable "random" property to Array.prototype
-        if ('random' in Array.prototype) {
-          Object.defineProperty(Array.prototype, 'random', { enumerable: false })
-        }
-
-        const filePath = path.resolve(process.cwd(), 'media/documents', doc.filename)
-        let fileBuffer: Buffer
-        if (req.file?.data) fileBuffer = Buffer.from(req.file.data)
-        else if (fs.existsSync(filePath)) fileBuffer = fs.readFileSync(filePath)
-        else if (doc.storageKey) {
-          const url = await getPresignedDownloadUrl(doc.storageKey, doc.r2Bucket || R2_BUCKET)
-          const response = await fetch(url, { signal: AbortSignal.timeout(30_000) })
-          if (!response.ok) throw new Error('Stored PDF could not be read for indexing.')
-          fileBuffer = Buffer.from(await response.arrayBuffer())
-        } else throw new Error('The original PDF is unavailable. Upload a replacement first.')
-
-        // Direct SQL and derived Payload writes must share the parent transaction.
-        const transactionID = await req.transactionID
-        const db = transactionID ? req.payload.db.sessions?.[String(transactionID)]?.db as any : (req.payload.db as any).drizzle
-        if (!db) throw new Error('Document transaction unavailable.')
-
-        // Resolve academic hierarchy metadata
-        let subjectName = ''
-        let semesterNumber: number | null = null
-        let branchName = ''
-        let moduleName = ''
-        let moduleNumber = ''
-        let topicName = ''
-        let topicNumber = ''
-        const chapter = doc.chapter || doc.name || 'Chapter'
-
-        try {
-          const subjectId = typeof doc.subject === 'object' ? doc.subject?.id : doc.subject
-          if (subjectId) {
-            const subjectDoc = await req.payload.findByID({
-              collection: 'subjects',
-              id: subjectId,
-              depth: 2,
-            })
-            subjectName = subjectDoc?.name || ''
-            if (subjectDoc?.semester && typeof subjectDoc.semester === 'object') {
-              semesterNumber = subjectDoc.semester.number || null
-              if (subjectDoc.semester.branch && typeof subjectDoc.semester.branch === 'object') {
-                branchName = subjectDoc.semester.branch.name || ''
-              }
-            }
-          }
-        } catch (metaErr) {
-          req.payload.logger.warn(`Could not resolve full hierarchy for doc ${doc.id}: ${metaErr}`)
-        }
-
-        try {
-          const moduleId = typeof doc.module === 'object' ? doc.module?.id : doc.module
-          if (moduleId) {
-            const moduleDoc = await req.payload.findByID({ collection: 'modules', id: moduleId, depth: 0 })
-            moduleName = moduleDoc?.name || ''
-            moduleNumber = moduleDoc?.number || ''
-          }
-          const topicId = typeof doc.topic === 'object' ? doc.topic?.id : doc.topic
-          if (topicId) {
-            const topicDoc = await req.payload.findByID({ collection: 'topics', id: topicId, depth: 0 })
-            topicName = topicDoc?.name || ''
-            topicNumber = topicDoc?.number || ''
-          }
-        } catch (metaErr) {
-          req.payload.logger.warn(`Could not resolve module hierarchy for doc ${doc.id}: ${metaErr}`)
-        }
-
-        // ─────────────────────────────────────────────────────────
-        // 1. CLOUDFLARE R2 UPLOAD (PDF Document)
-        // ─────────────────────────────────────────────────────────
-        const { folder: r2Folder, pdfKey: r2PdfKey } = buildDocumentStoragePaths({
-          id: doc.id, filename: doc.filename, branchName, semesterNumber, subjectName,
-          moduleNumber, moduleName, topicNumber, topicName,
-        })
-
-        try {
-          req.payload.logger.info(`Uploading document ${doc.id} to Cloudflare R2: ${r2PdfKey}`)
-          await uploadToR2({
-            buffer: fileBuffer,
-            key: r2PdfKey,
-            contentType: 'application/pdf',
-          })
-
-          await db.execute(sql`
-            UPDATE documents 
-            SET storage_key = ${r2PdfKey}, r2_bucket = ${R2_BUCKET}
-            WHERE id = ${doc.id};
-          `)
-          req.payload.logger.info(`Saved R2 storageKey=${r2PdfKey} to document ${doc.id}`)
-        } catch (r2Err: any) {
-          req.payload.logger.error(`Cloudflare R2 upload warning for doc ${doc.id}: ${r2Err?.message}`)
-        }
-
-        // ─────────────────────────────────────────────────────────
-        // 2. EXTRACT DIAGRAMS & MEDIA PER PAGE -> CLOUDFLARE R2
-        // ─────────────────────────────────────────────────────────
-        const pageImageMap = new Map<number, { r2Key: string; caption: string }>()
-        let PDFParseClass: any = null
-        let CanvasFactoryClass: any = null
-
-        try {
-          // Lazy-load worker and pdf-parse dynamically to prevent top-level module evaluation issues
-          const workerMod = await import('pdf-parse/worker')
-          CanvasFactoryClass = workerMod.CanvasFactory
-          const pdfParseMod = await import('pdf-parse')
-          PDFParseClass = pdfParseMod.PDFParse
-        } catch (loadErr: any) {
-          req.payload.logger.warn(`pdf-parse module could not be initialized: ${loadErr?.message}`)
-        }
-
-        if (PDFParseClass) {
-          try {
-            req.payload.logger.info(`Extracting diagrams and slide visuals from ${doc.filename}...`)
-            const parser: any = new PDFParseClass({
-              data: new Uint8Array(fileBuffer),
-              ...(CanvasFactoryClass ? { CanvasFactory: CanvasFactoryClass } : {}),
-            })
-            const imgRes = await parser.getImage()
-            const pagesWithMedia = new Set<number>(
-              imgRes.pages
-                .filter((p: any) => p.images && p.images.length > 0)
-                .map((p: any) => Number(p.pageNumber))
-            )
-
-            for (const pageNum of Array.from(pagesWithMedia)) {
-              try {
-                const shotRes = await parser.getScreenshot({ partial: [pageNum], imageBuffer: true, imageDataUrl: false })
-                const pData = shotRes.pages.find((p: any) => p.pageNumber === pageNum)
-                if (pData && pData.data) {
-                  const imgKey = `${r2Folder}/media/page_${pageNum}.png`
-                  await uploadToR2({
-                    buffer: Buffer.from(pData.data),
-                    key: imgKey,
-                    contentType: 'image/png',
-                  })
-                  pageImageMap.set(pageNum, {
-                    r2Key: imgKey,
-                    caption: `Diagram & Visual Slide (Page ${pageNum})`,
-                  })
-                }
-              } catch (err) {
-                // Non-critical if individual page screenshot fails
-              }
-            }
-            await parser.destroy()
-            req.payload.logger.info(`Extracted & uploaded ${pageImageMap.size} page diagrams to R2.`)
-          } catch (mediaErr: any) {
-            req.payload.logger.warn(`Diagram extraction warning: ${mediaErr?.message}`)
-          }
-        }
-
-        // ─────────────────────────────────────────────────────────
-        // 3. PARSE PDF & SPLIT CHUNKS
-        // ─────────────────────────────────────────────────────────
-        const { PDFLoader } = await import('@langchain/community/document_loaders/fs/pdf')
-        const loader = new PDFLoader(new Blob([new Uint8Array(fileBuffer)], { type: 'application/pdf' }))
-        let rawDocs = await loader.load()
-        req.payload.logger.info(`Extracted ${rawDocs.length} pages from ${doc.filename}`)
-
-        // Text loaders omit image-only pages, including every page in a scan.
-        // Enumerate physical pages independently so missing pages reach OCR too.
-        if (PDFParseClass) {
-          const inventory = new PDFParseClass({ data: new Uint8Array(fileBuffer) })
-          try {
-            const info = await inventory.getInfo()
-            if (Number.isInteger(info.total) && info.total > 0) {
-              const textPages = new Map(rawDocs.map((page) => [page.metadata.loc?.pageNumber, page]))
-              rawDocs = Array.from({ length: info.total }, (_, index) => {
-                const pageNumber = index + 1
-                return textPages.get(pageNumber) || { pageContent: '', metadata: { loc: { pageNumber } } }
-              })
-              req.payload.logger.info(`Checking all ${info.total} physical pages for text or OCR.`)
-            }
-          } finally {
-            await inventory.destroy()
-          }
-        }
-
-        // Delete previous chunks/pages on update
-        if (operation === 'update') {
-          await deleteDocumentDependents({ id: doc.id, req })
-        }
-
-        const { RecursiveCharacterTextSplitter } = await import('@langchain/textsplitters')
-        const splitter = new RecursiveCharacterTextSplitter({
-          chunkSize: 1000,
-          chunkOverlap: 200,
-        })
-
-        interface PendingChunk {
-          pageNumber: number
-          text: string
-          hasImage: boolean
-          imageUrl?: string
-          imageCaption?: string
-        }
-
-        const pendingChunks: PendingChunk[] = []
-
-        for (const rDoc of rawDocs) {
-          const pageNumber = rDoc.metadata.loc?.pageNumber || 1
-          let pageText = rDoc.pageContent?.trim() || ''
-          const imgInfo = pageImageMap.get(pageNumber)
-
-          // ─────────────────────────────────────────────────────────
-          // OCR FALLBACK: For scanned, CamScanner & handwritten pages (< 40 chars)
-          // ─────────────────────────────────────────────────────────
-          if (pageText.length < 40 && PDFParseClass) {
-            req.payload.logger.info(`Page ${pageNumber} has low text density (${pageText.length} chars). Triggering OCR fallback...`)
-            try {
-              const ocrParser: any = new PDFParseClass({
-                data: new Uint8Array(fileBuffer),
-                ...(CanvasFactoryClass ? { CanvasFactory: CanvasFactoryClass } : {}),
-              })
-              try {
-                const shotRes = await ocrParser.getScreenshot({ partial: [pageNumber], scale: 2, imageBuffer: true, imageDataUrl: false })
-                const pData = shotRes.pages.find((p: any) => p.pageNumber === pageNumber)
-                if (pData?.data) {
-                  const ocrText = await extractTextFromImage(pData.data, { preferLocal: true })
-                  if (ocrText && ocrText.length > 20) {
-                    req.payload.logger.info(`Tesseract extracted ${ocrText.length} characters from Page ${pageNumber}.`)
-                    pageText = `[OCR Transcribed Page ${pageNumber}]:\n${ocrText}`
-                  }
-                }
-              } finally {
-                await ocrParser.destroy()
-              }
-            } catch (ocrErr: any) {
-              req.payload.logger.warn(`OCR fallback failed for page ${pageNumber}: ${ocrErr?.message}`)
-            }
-          }
-
-          // Save raw document page
-          await req.payload.create({
-            collection: 'document_pages',
-            req,
-            data: {
-              document: doc.id,
-              pageNumber,
-              text: pageText,
-            },
-          })
-
-          // Split page into text chunks
-          const splitChunks = await splitter.createDocuments([pageText])
-          for (const sc of splitChunks) {
-            if (sc.pageContent.trim().length > 20) {
-              pendingChunks.push({
-                pageNumber,
-                text: sc.pageContent,
-                hasImage: Boolean(imgInfo),
-                imageUrl: imgInfo?.r2Key,
-                imageCaption: imgInfo?.caption,
-              })
-            }
-          }
-        }
-
-        // ─────────────────────────────────────────────────────────
-        // 4. BATCH EMBEDDING GENERATION & BULK INGESTION
-        // Process in batches of 16 instead of slow sequential 1-by-1
-        // ─────────────────────────────────────────────────────────
-        req.payload.logger.info(`Generating embeddings for ${pendingChunks.length} chunks in batches...`)
-        if (context.failOnIngestionError && !pendingChunks.length) throw new Error('No readable text chunks were extracted. This PDF may need OCR or a clearer scan.')
-        const BATCH_SIZE = 16
-
-        for (let i = 0; i < pendingChunks.length; i += BATCH_SIZE) {
-          const batch = pendingChunks.slice(i, i + BATCH_SIZE)
-
-          // Generate embeddings concurrently for the batch
-          const embeddings = await Promise.all(
-            batch.map((chunk) => getEmbedding(chunk.text))
-          )
-
-          // Insert batch chunks
-          for (let j = 0; j < batch.length; j++) {
-            const item = batch[j]
-            const vector = embeddings[j]
-            const vectorStr = JSON.stringify(vector)
-
-            const createdChunk = await req.payload.create({
-              collection: 'chunks',
-              req,
-              data: {
-                document: doc.id,
-                pageNumber: item.pageNumber,
-                text: item.text,
-                chapter,
-                subjectName,
-                moduleName,
-                moduleNumber,
-                topicName,
-                topicNumber,
-                semester: semesterNumber,
-                branch: branchName,
-                hasImage: item.hasImage,
-                imageUrl: item.imageUrl,
-                imageCaption: item.imageCaption,
-              },
-            })
-
-            // Update pgvector embedding and image columns
-            await db.execute(sql`
-              UPDATE chunks 
-              SET embedding = ${vectorStr}::vector,
-                  has_image = ${item.hasImage},
-                  image_url = ${item.imageUrl || null},
-                  image_caption = ${item.imageCaption || null}
-              WHERE id = ${createdChunk.id}
-            `)
-          }
-        }
-
-        // Ensure HNSW and GIN indexes exist on PostgreSQL
-        await db.execute(sql`
-          CREATE INDEX IF NOT EXISTS chunks_fts_idx 
-          ON chunks 
-          USING GIN (to_tsvector('english', text));
-        `)
-        await db.execute(sql`
-          CREATE INDEX IF NOT EXISTS chunks_embedding_hnsw
-          ON chunks
-          USING hnsw (embedding vector_cosine_ops);
-        `)
-
-        req.payload.logger.info(
-          `Successfully ingested document ${doc.id}: ${rawDocs.length} pages, ${pendingChunks.length} chunks, ${pageImageMap.size} diagrams indexed.`
-        )
-      } catch (error) {
-        req.payload.logger.error(`Error ingesting PDF ${doc.id}: ${error}`)
-        if (context.failOnIngestionError) throw error
+        buffer = await fs.readFile(filePath)
+      } catch {
+        throw new Error('Original PDF is unavailable. Replace it from Materials.')
       }
     }
+    req.payload.logger.info(`Parsing document ${doc.id}: ${doc.filename}`)
+    const subjectId = typeof doc.subject === 'object' ? doc.subject?.id : doc.subject
+    const subject = await req.payload.findByID({
+      collection: 'subjects',
+      id: subjectId,
+      depth: 2,
+      req,
+    })
+    const semester = typeof subject.semester === 'object' ? subject.semester : undefined
+    const branch = semester && typeof semester.branch === 'object' ? semester.branch : undefined
+    const moduleId = typeof doc.module === 'object' ? doc.module?.id : doc.module
+    const topicId = typeof doc.topic === 'object' ? doc.topic?.id : doc.topic
+    const module = moduleId
+      ? await req.payload.findByID({ collection: 'modules', id: moduleId, depth: 0, req })
+      : undefined
+    const topic = topicId
+      ? await req.payload.findByID({ collection: 'topics', id: topicId, depth: 0, req })
+      : undefined
+    const tags = {
+      chapter: doc.chapter || doc.name,
+      subjectName: subject.name,
+      semester: semester?.number,
+      branch: branch?.name || '',
+      moduleName: module?.name || '',
+      moduleNumber: module?.number || '',
+      topicName: topic?.name || '',
+      topicNumber: topic?.number || '',
+    }
+    const storage = buildDocumentStoragePaths({
+      id: doc.id,
+      filename: doc.filename,
+      ...tags,
+      semesterNumber: tags.semester,
+      branchName: tags.branch,
+    })
+    const versionFolder = `${storage.folder}/versions/${jobId || randomUUID()}`
+    const visuals = new Map<number, string>()
+    const checkpoints = new Map<number, ExtractedPDFPage>()
+    if (jobId && lease) {
+      const saved = await checkpointDB.execute(
+        sql`SELECT page_number, text, ocr, preview_key FROM document_upload_pages WHERE job_id = ${jobId}::uuid`,
+      )
+      for (const row of saved.rows)
+        checkpoints.set(Number(row.page_number), {
+          pageNumber: Number(row.page_number),
+          text: row.text,
+          ocr: row.ocr,
+          previewKey: row.preview_key || undefined,
+        })
+    }
+    // Consume previews one page at a time; a large scan must not retain hundreds
+    // of rendered PNGs in the serverless heap. Old published assets are untouched.
+    const pages = await extractPDF(buffer, {
+      onProgress: (message) => {
+        const page = message.match(/Reading page (\d+) \/ (\d+)/)
+        return progress(
+          page ? 10 + Math.floor((Number(page[1]) / Number(page[2])) * 29) : 15,
+          message,
+        )
+      },
+      cachedPage: (page) => checkpoints.get(page),
+      maxFreshPages: jobId ? 8 : undefined,
+      maxOCRPages: jobId ? 3 : undefined,
+      onPage: async (page) => {
+        if (page.previewKey) visuals.set(page.pageNumber, page.previewKey)
+        if (page.screenshot) {
+          const key = `${versionFolder}/media/page_${page.pageNumber}.png`
+          try {
+            await uploadToR2({ buffer: page.screenshot, key, contentType: 'image/png' })
+            visuals.set(page.pageNumber, key)
+          } catch (error) {
+            req.payload.logger.warn(
+              `Page ${page.pageNumber} preview could not save: ${String(error)}`,
+            )
+          }
+        }
+        if (jobId && lease && !checkpoints.has(page.pageNumber)) {
+          const saved =
+            await checkpointDB.execute(sql`INSERT INTO document_upload_pages (job_id, page_number, text, ocr, preview_key)
+            SELECT id, ${page.pageNumber}, ${page.text}, ${page.ocr}, ${visuals.get(page.pageNumber) || null} FROM document_upload_jobs
+            WHERE id = ${jobId}::uuid AND lease_token = ${lease}::uuid AND status = 'running'
+            ON CONFLICT (job_id, page_number) DO NOTHING RETURNING page_number`)
+          if (!saved.rows.length)
+            throw new Error('This indexing attempt lost its lease. Resume the active job.')
+        }
+        page.screenshot = undefined
+      },
+    })
+    const { RecursiveCharacterTextSplitter } = await import('@langchain/textsplitters')
+    const splitter = new RecursiveCharacterTextSplitter({ chunkSize: 1000, chunkOverlap: 200 })
+    const chunks: Array<{ pageNumber: number; text: string; vector?: number[] }> = []
+    for (const page of pages) {
+      for (const text of await splitter.splitText(page.text))
+        if (text.trim().length > 20) chunks.push({ pageNumber: page.pageNumber, text })
+    }
+    if (!chunks.length) throw new Error('No readable chunks were extracted. Upload a clearer PDF.')
+    for (let start = 0; start < chunks.length; start += 16) {
+      await progress(
+        40 + Math.floor((start / chunks.length) * 35),
+        `Embedding chunks ${start + 1}–${Math.min(start + 16, chunks.length)} / ${chunks.length}`,
+      )
+      const batch = chunks.slice(start, start + 16)
+      const vectors = await Promise.all(batch.map((chunk) => getEmbedding(chunk.text)))
+      batch.forEach((chunk, index) => {
+        chunk.vector = vectors[index]
+      })
+    }
+    // A cloud PDF is mandatory; never leave production pointing at ephemeral disk.
+    // Stage a fresh object version: a failed DB transaction must never overwrite
+    // the PDF or previews still referenced by the previous successful index.
+    await progress(80, 'Saving the cloud PDF and source screenshots')
+    const cloud = await uploadToR2({
+      buffer,
+      key: `${versionFolder}/${doc.filename}`,
+      contentType: 'application/pdf',
+    })
+    if (jobId && lease) {
+      // Fence stale workers before publication. A second claim cannot publish
+      // another document after its predecessor resumes from a timed-out request.
+      const locked = await db.execute(
+        sql`SELECT lease_token, dedup_key FROM document_upload_jobs WHERE id = ${jobId}::uuid FOR UPDATE`,
+      )
+      if (locked.rows[0]?.lease_token !== lease)
+        throw new Error('This indexing attempt lost its lease.')
+      const key = locked.rows[0]?.dedup_key
+      if (key && operation === 'create') {
+        await db.execute(
+          sql`SELECT pg_advisory_xact_lock(hashtext('parsea-pdf-dedup'), hashtext(${key}))`,
+        )
+        const duplicate =
+          await db.execute(sql`SELECT document_id FROM document_upload_jobs WHERE dedup_key = ${key}
+          AND status = 'ready' AND document_id IS NOT NULL AND id <> ${jobId}::uuid
+          AND EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = document_upload_jobs.document_id AND c.embedding_model = ${EMBEDDING_MODEL}) LIMIT 1`)
+        if (duplicate.rows[0]) throw new DuplicateDocument(Number(duplicate.rows[0].document_id))
+      }
+    }
+    if (operation === 'update') await deleteDocumentDependents({ id: doc.id, req })
+    for (const page of pages) {
+      // Blank pages are logged, not represented as searchable content.
+      if (page.text.trim().length <= 20) continue
+      await req.payload.create({
+        collection: 'document_pages',
+        req,
+        data: { document: doc.id, pageNumber: page.pageNumber, text: page.text },
+      })
+    }
+    // Derived chunks have no write hooks. Bound bulk SQL avoids Payload lock
+    // round trips; it uses the same transaction as the parent document.
+    for (let start = 0; start < chunks.length; start += 32) {
+      const values = chunks.slice(start, start + 32).map((chunk) => {
+        const image = visuals.get(chunk.pageNumber)
+        return sql`(${doc.id}, ${chunk.pageNumber}, ${chunk.text}, ${tags.chapter}, ${tags.subjectName}, ${tags.semester || null}, ${tags.branch}, ${tags.moduleName}, ${tags.moduleNumber}, ${tags.topicName}, ${tags.topicNumber}, ${Boolean(image)}, ${image || null}, ${image ? `Source page screenshot (Page ${chunk.pageNumber})` : null}, ${JSON.stringify(chunk.vector)}::vector, ${EMBEDDING_MODEL}, NOW(), NOW())`
+      })
+      await db.execute(
+        sql`INSERT INTO chunks (document_id, page_number, text, chapter, subject_name, semester, branch, module_name, module_number, topic_name, topic_number, has_image, image_url, image_caption, embedding, embedding_model, created_at, updated_at) VALUES ${sql.join(values, sql`, `)}`,
+      )
+    }
+    await db.execute(
+      sql`UPDATE documents SET storage_key = ${cloud.key}, r2_bucket = ${cloud.bucket} WHERE id = ${doc.id}`,
+    )
+    const visualOnlyPages = pages.filter((page) => page.text.trim().length <= 20).length
+    if (jobId)
+      await db.execute(sql`UPDATE document_upload_jobs SET status = 'ready', document_id = ${doc.id},
+      progress = 100, stage = ${visualOnlyPages ? `Parsed and indexed · ${visualOnlyPages} pages without searchable text` : 'Parsed and indexed'}, error = NULL, updated_at = now() WHERE id = ${jobId}::uuid`)
+    req.payload.logger.info(
+      `Indexed document ${doc.id}: ${pages.length} physical pages, ${chunks.length} semantic chunks, ${visuals.size} screenshots (${EMBEDDING_MODEL}).`,
+    )
+    return { ...doc, storageKey: cloud.key, r2Bucket: cloud.bucket }
+  } catch (error) {
+    if (error instanceof IngestionPending || error instanceof DuplicateDocument)
+      req.payload.logger.info(`Document ${doc.id}: ${error.message}`)
+    else req.payload.logger.error(`Indexing document ${doc.id} failed: ${String(error)}`)
+    throw error // Parent transaction rolls back, preserving the old index.
   }
-  return doc
 }

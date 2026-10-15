@@ -1,123 +1,113 @@
-import { describe, it, beforeEach, expect, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { processDocument } from '@/hooks/processDocument'
-
-const mocks = vi.hoisted(() => ({
-  load: vi.fn(),
-  embed: vi.fn(),
-  upload: vi.fn(),
-  presign: vi.fn(),
-  info: vi.fn(),
-  screenshot: vi.fn(),
-  ocr: vi.fn(),
-}))
-vi.mock('@/lib/embeddings', () => ({ getEmbedding: mocks.embed }))
+const mocks = vi.hoisted(() => ({ extract: vi.fn(), embed: vi.fn(), upload: vi.fn() }))
+vi.mock('@/lib/pdf-extraction', () => ({ extractPDF: mocks.extract }))
+vi.mock('@/lib/embeddings', () => ({ getEmbedding: mocks.embed, EMBEDDING_MODEL: 'test-model' }))
 vi.mock('@/lib/r2', () => ({
   uploadToR2: mocks.upload,
-  getPresignedDownloadUrl: mocks.presign,
+  getPresignedDownloadUrl: vi.fn(),
   R2_BUCKET: 'test',
-}))
-vi.mock('@/lib/ocr', () => ({ extractTextFromImage: mocks.ocr }))
-vi.mock('@langchain/community/document_loaders/fs/pdf', () => ({
-  PDFLoader: class {
-    load = mocks.load
-  },
-}))
-vi.mock('pdf-parse/worker', () => ({ CanvasFactory: class {} }))
-vi.mock('pdf-parse', () => ({
-  PDFParse: class {
-    async load() {}
-    getInfo = mocks.info
-    getScreenshot = mocks.screenshot
-    async getImage() {
-      return { pages: [] }
-    }
-    async destroy() {}
-  },
 }))
 vi.mock('@langchain/textsplitters', () => ({
   RecursiveCharacterTextSplitter: class {
-    async createDocuments(text: string[]) {
-      return text.map((pageContent) => ({ pageContent }))
+    async splitText(text: string) {
+      return text ? [text] : []
     }
   },
 }))
-
-describe('Canonical indexing retry safety (no real embeddings or storage calls)', () => {
+describe('Canonical indexing transaction safety', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mocks.upload.mockResolvedValue(undefined)
-    mocks.embed.mockResolvedValue([0, 1])
-    mocks.info.mockResolvedValue({ total: 0 })
-    mocks.ocr.mockResolvedValue('A readable scanned explanation of truth tables and propositional logic.')
-    mocks.screenshot.mockImplementation(async ({ partial }) => ({ pages: [{ pageNumber: partial[0], data: new Uint8Array([1]) }] }))
-    mocks.load.mockResolvedValue([
+    mocks.extract.mockResolvedValue([
       {
-        pageContent:
-          'A readable explanation of propositions, truth tables, and logical equivalence.',
-        metadata: { loc: { pageNumber: 1 } },
+        pageNumber: 3,
+        text: 'A readable explanation of propositions and truth tables.',
+        screenshot: new Uint8Array([1]),
+        ocr: true,
       },
     ])
+    mocks.embed.mockResolvedValue([0, 1])
+    mocks.upload.mockImplementation(async ({ key }) => ({ key, bucket: 'test' }))
   })
-  function args() {
-    const transactional = { execute: vi.fn() }
-    const outside = { execute: vi.fn() }
+  function setup() {
+    const execute = vi.fn(),
+      remove = vi.fn(),
+      outside = vi.fn()
     const req = {
       transactionID: 'parent',
-      file: { data: new Uint8Array([1, 2, 3]) },
+      file: { data: Buffer.from('%PDF-test') },
       payload: {
-        db: { drizzle: outside, sessions: { parent: { db: transactional } }, deleteMany: vi.fn() },
+        db: {
+          drizzle: { execute: outside },
+          sessions: { parent: { db: { execute } } },
+          deleteMany: remove,
+        },
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        findByID: vi.fn(async () => ({
+          name: 'Math',
+          semester: { number: 3, branch: { name: 'COMPS' } },
+        })),
         create: vi.fn(async () => ({ id: 9 })),
-        findByID: vi.fn(),
       },
     }
     return {
-      args: {
-        doc: { id: 2, name: 'Logic', filename: 'Logic.pdf', mimeType: 'application/pdf' },
-        req,
-        operation: 'update',
-        context: { failOnIngestionError: true },
-      } as any,
-      transactional,
+      execute,
+      remove,
       outside,
       req,
+      args: {
+        doc: { id: 2, name: 'Logic', filename: 'Math_Logic.pdf', subject: 1 },
+        req,
+        operation: 'update',
+      } as any,
     }
   }
-  it('keeps chunk/page writes and vector SQL in the parent transaction', async () => {
-    const test = args()
-    await processDocument(test.args)
-    expect(test.outside.execute).not.toHaveBeenCalled()
-    expect(test.transactional.execute).toHaveBeenCalled()
-    expect(test.req.payload.create).toHaveBeenCalledTimes(2)
-    for (const call of test.req.payload.create.mock.calls as any[])
-      expect(call[0].req).toBe(test.req)
+  it('keeps writes in the parent transaction and preserves physical page numbers', async () => {
+    const t = setup()
+    const result = await processDocument(t.args)
+    expect(t.outside).not.toHaveBeenCalled()
+    expect(t.execute).toHaveBeenCalledTimes(2)
+    expect(t.req.payload.create).toHaveBeenCalledWith(
+      expect.objectContaining({ req: t.req, data: expect.objectContaining({ pageNumber: 3 }) }),
+    )
+    expect(result.storageKey).toContain('/versions/')
+    expect(t.remove).toHaveBeenCalledTimes(2)
   })
-  it('propagates explicit retry failures rather than reporting success', async () => {
-    mocks.load.mockRejectedValueOnce(new Error('PDF could not be parsed'))
-    const test = args()
-    await expect(processDocument(test.args)).rejects.toThrow('PDF could not be parsed')
-    expect(test.req.payload.create).not.toHaveBeenCalled()
+  it('preserves the old index if extraction fails', async () => {
+    mocks.extract.mockRejectedValueOnce(new Error('PDF could not be parsed'))
+    const t = setup()
+    await expect(processDocument(t.args)).rejects.toThrow('PDF could not be parsed')
+    expect(t.remove).not.toHaveBeenCalled()
   })
-  it('rejects an empty text index instead of marking it ready', async () => {
-    mocks.load.mockResolvedValueOnce([])
-    await expect(processDocument(args().args)).rejects.toThrow('No readable text chunks')
-    expect(mocks.embed).not.toHaveBeenCalled()
+  it('preserves the old index if model inference fails', async () => {
+    mocks.embed.mockRejectedValueOnce(new Error('Model unavailable'))
+    const t = setup()
+    await expect(processDocument(t.args)).rejects.toThrow('Model unavailable')
+    expect(t.remove).not.toHaveBeenCalled()
   })
-  it('runs local OCR when the text loader returns zero pages', async () => {
-    mocks.load.mockResolvedValueOnce([])
-    mocks.info.mockResolvedValueOnce({ total: 2 })
-    const test = args()
-    await processDocument(test.args)
-    expect(mocks.ocr).toHaveBeenCalledTimes(2)
-    expect(mocks.ocr).toHaveBeenCalledWith(expect.any(Uint8Array), { preferLocal: true })
-    expect(mocks.screenshot.mock.calls.map(([options]) => options.partial)).toEqual([[1], [2]])
-    expect(mocks.embed).toHaveBeenCalledTimes(2)
+  it('requires a cloud copy before publishing', async () => {
+    mocks.upload.mockRejectedValueOnce(new Error('Storage unavailable'))
+    const t = setup()
+    await expect(processDocument(t.args)).rejects.toThrow('Storage unavailable')
+    expect(t.remove).not.toHaveBeenCalled()
   })
-  it('includes scanned pages omitted between text pages without OCRing readable text', async () => {
-    mocks.info.mockResolvedValueOnce({ total: 2 })
-    await processDocument(args().args)
-    expect(mocks.ocr).toHaveBeenCalledTimes(1)
-    expect(mocks.screenshot).toHaveBeenCalledWith(expect.objectContaining({ partial: [2], scale: 2 }))
-    expect(mocks.embed).toHaveBeenCalledTimes(2)
+  it('fences a stale job attempt before replacing any published index', async () => {
+    const t = setup()
+    t.args.context = {
+      uploadJobId: '00000000-0000-4000-8000-000000000001',
+      uploadLeaseToken: '00000000-0000-4000-8000-000000000002',
+    }
+    t.outside.mockResolvedValue({ rows: [] })
+    t.execute.mockResolvedValueOnce({
+      rows: [{ lease_token: '00000000-0000-4000-8000-000000000003' }],
+    })
+    await expect(processDocument(t.args)).rejects.toThrow('lost its lease')
+    expect(t.remove).not.toHaveBeenCalled()
+  })
+  it('rejects empty extraction', async () => {
+    mocks.extract.mockResolvedValueOnce([])
+    const t = setup()
+    await expect(processDocument(t.args)).rejects.toThrow('No readable chunks')
+    expect(t.remove).not.toHaveBeenCalled()
   })
 })

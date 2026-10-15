@@ -47,6 +47,6 @@ describe('document deletion', () => {
 
   it('invalidates current and legacy answer caches so removed sources are not cached', async () => {
     await invalidateDocumentAnswers()
-    expect(cache.invalidateCachePrefix.mock.calls).toEqual([['rag:v3:'], ['rag:v2:']])
+    expect(cache.invalidateCachePrefix.mock.calls).toEqual([['rag:v4:'], ['session:'], ['rag:v3:'], ['rag:v2:']])
   })
 })

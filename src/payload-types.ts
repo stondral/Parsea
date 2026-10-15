@@ -329,6 +329,7 @@ export interface DocumentPage {
  */
 export interface Chunk {
   id: number;
+  embeddingModel?: string | null;
   document: number | Document;
   pageNumber: number;
   text: string;
@@ -632,6 +633,7 @@ export interface DocumentPagesSelect<T extends boolean = true> {
  * via the `definition` "chunks_select".
  */
 export interface ChunksSelect<T extends boolean = true> {
+  embeddingModel?: T;
   document?: T;
   pageNumber?: T;
   text?: T;

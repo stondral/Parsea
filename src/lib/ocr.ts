@@ -1,4 +1,11 @@
-import { createWorker } from 'tesseract.js'
+import { createWorker, type Worker } from 'tesseract.js'
+import os from 'node:os'
+import { recognizeOCR } from './ocrRecognition'
+
+export const createLocalOCRWorker = () =>
+  createWorker('eng', undefined, {
+    cachePath: process.env.VERCEL ? os.tmpdir() : process.cwd(),
+  })
 
 /**
  * Perform OCR on a scanned page image buffer.
@@ -7,7 +14,7 @@ import { createWorker } from 'tesseract.js'
  */
 export async function extractTextFromImage(
   imageBuffer: Buffer | Uint8Array,
-  options: { preferLocal?: boolean } = {},
+  options: { preferLocal?: boolean; worker?: Worker } = {},
 ): Promise<string> {
   const base64Image = Buffer.from(imageBuffer).toString('base64')
   const apiKey = process.env.OPENROUTER_API_KEY
@@ -67,14 +74,17 @@ export async function extractTextFromImage(
   // 2. Local Tesseract.js WASM (language data downloads on first use).
   // ─────────────────────────────────────────────────────────
   try {
-    const worker = await createWorker('eng')
+    const worker = options.worker || (await createLocalOCRWorker())
     try {
-      const ret = await worker.recognize(Buffer.from(imageBuffer))
-      return ret.data.text.trim()
+      return await recognizeOCR(worker, Buffer.from(imageBuffer), async (degrees) => {
+        const { default: sharp } = await import('sharp')
+        return sharp(Buffer.from(imageBuffer)).rotate(degrees).png().toBuffer()
+      })
     } finally {
-      await worker.terminate()
+      if (!options.worker) await worker.terminate()
     }
   } catch (tessErr) {
+    if (options.worker) throw tessErr
     console.error('Local Tesseract OCR error:', tessErr)
     return ''
   }

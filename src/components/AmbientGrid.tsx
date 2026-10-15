@@ -11,7 +11,6 @@ export function AmbientGrid() {
     const context = canvas?.getContext('2d')
     if (!canvas || !context) return
     const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)')
-    const pointerPreference = window.matchMedia('(hover: hover) and (pointer: fine)')
     const cells = new Map<string, { x: number; y: number; touched: number }>()
     const size = 56
     let width = 0
@@ -61,18 +60,27 @@ export function AmbientGrid() {
       draw(performance.now())
     }
 
-    function onPointerMove(event: PointerEvent) {
-      if (motionPreference.matches || !pointerPreference.matches || event.pointerType !== 'mouse')
-        return
+    function touchCell(event: PointerEvent, refresh = false) {
+      if (motionPreference.matches) return
       const x = Math.floor(event.clientX / size)
       const y = Math.floor(event.clientY / size)
       const key = `${x}:${y}`
-      if (key === lastCell) return
+      if (!refresh && key === lastCell) return
       lastCell = key
       cells.set(key, { x, y, touched: performance.now() })
       // Bound work even if the pointer crosses the whole viewport very quickly.
       if (cells.size > 48) cells.delete(cells.keys().next().value!)
       if (!frame) frame = window.requestAnimationFrame(draw)
+    }
+
+    function onPointerMove(event: PointerEvent) {
+      // Touch/pen trails only follow contact; mouse hover still works on hybrid devices.
+      if (event.pointerType !== 'mouse' && !event.buttons) return
+      touchCell(event)
+    }
+
+    function onPointerDown(event: PointerEvent) {
+      touchCell(event, true)
     }
 
     function clearTrail() {
@@ -85,12 +93,14 @@ export function AmbientGrid() {
     resize()
     window.addEventListener('resize', resize)
     window.addEventListener('pointermove', onPointerMove, { passive: true })
+    window.addEventListener('pointerdown', onPointerDown, { passive: true })
     window.addEventListener('blur', clearTrail)
     motionPreference.addEventListener('change', clearTrail)
     return () => {
       if (frame) window.cancelAnimationFrame(frame)
       window.removeEventListener('resize', resize)
       window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerdown', onPointerDown)
       window.removeEventListener('blur', clearTrail)
       motionPreference.removeEventListener('change', clearTrail)
     }

@@ -22,7 +22,8 @@ export function TRPCProvider({ children }: { children: React.ReactNode }) {
     trpc.createClient({
       links: [
         splitLink({
-          condition: (operation) => operation.path === 'notes.getStats',
+          condition: (operation) =>
+            operation.path === 'notes.getStats' || operation.path.startsWith('uploads.'),
           true: httpLink({ url: '/api/trpc' }),
           false: httpBatchLink({ url: '/api/trpc' }),
         }),

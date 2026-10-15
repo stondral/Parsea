@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server'
 import { getPayload } from 'payload'
 import config from '@/payload.config'
-import path from 'path'
-import fs from 'fs'
 import { buildDownloadFilename, classifyDocumentFilename } from '@/lib/documentClassification'
+
+export const runtime = 'nodejs'
+export const maxDuration = 300
 
 export async function POST(req: Request) {
   try {
@@ -19,6 +20,8 @@ export async function POST(req: Request) {
     if (!file) {
       return NextResponse.json({ error: 'Please choose a PDF file to upload.' }, { status: 400 })
     }
+    if (file.size > 25 * 1024 * 1024)
+      return NextResponse.json({ error: 'Split PDFs larger than 25 MB into smaller module files.' }, { status: 400 })
 
     if (!name || !name.trim()) {
       return NextResponse.json({ error: 'Please provide a title for the document.' }, { status: 400 })
@@ -27,56 +30,30 @@ export async function POST(req: Request) {
     if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
       return NextResponse.json({ error: 'Only PDF documents are supported.' }, { status: 400 })
     }
+    if (!['Notes', 'PYQs', 'Assignments'].includes(type))
+      return NextResponse.json({ error: 'Choose a valid document type.' }, { status: 400 })
+    const fileBuffer = Buffer.from(await file.arrayBuffer())
+    if (!fileBuffer.subarray(0, 1024).includes(Buffer.from('%PDF-')))
+      return NextResponse.json({ error: 'This file does not contain a valid PDF header.' }, { status: 400 })
 
     const payloadConfig = await config
     const payload = await getPayload({ config: payloadConfig })
+    const uploadUser = (await payload.auth({ headers: req.headers })).user
     const filenameInfo = classifyDocumentFilename(file.name)
 
-    // Resolve or bootstrap subject if necessary
-    let resolvedSubjectId: number
-    const parsedSubjectId = Number(subjectId)
-
-    if (subjectId && !isNaN(parsedSubjectId) && parsedSubjectId > 0) {
-      resolvedSubjectId = parsedSubjectId
-    } else {
-      const existingSubjects = await payload.find({ collection: 'subjects', limit: 1 })
-      if (existingSubjects.docs.length > 0) {
-        resolvedSubjectId = existingSubjects.docs[0].id
-      } else {
-        // Bootstrap baseline academic hierarchy
-        const existingSem = await payload.find({ collection: 'semesters', limit: 1 })
-        let semId = existingSem.docs[0]?.id
-        if (!semId) {
-          const existingBranch = await payload.find({ collection: 'branches', limit: 1 })
-          let branchId = existingBranch.docs[0]?.id
-          if (!branchId) {
-            const existingCollege = await payload.find({ collection: 'colleges', limit: 1 })
-            let colId = existingCollege.docs[0]?.id
-            if (!colId) {
-              const newCol = await payload.create({
-                collection: 'colleges',
-                data: { name: 'Engineering College' },
-              })
-              colId = newCol.id
-            }
-            const newBranch = await payload.create({
-              collection: 'branches',
-              data: { name: 'Computer Engineering', college: colId },
-            })
-            branchId = newBranch.id
-          }
-          const newSem = await payload.create({
-            collection: 'semesters',
-            data: { name: 'Semester 3', number: 3, branch: branchId },
-          })
-          semId = newSem.id
-        }
-        const newSub = await payload.create({
-          collection: 'subjects',
-          data: { name: 'Discrete Mathematics', semester: semId },
-        })
-        resolvedSubjectId = newSub.id
-      }
+    // Never silently place a PDF under an arbitrary first subject.
+    const resolvedSubjectId = Number(subjectId)
+    if (!Number.isInteger(resolvedSubjectId) || resolvedSubjectId < 1)
+      return NextResponse.json({ error: 'Choose a subject before uploading.' }, { status: 400 })
+    const replacement = Number(formData.get('replaceDocumentId'))
+    let admin: Awaited<ReturnType<typeof payload.auth>>['user'] = null
+    if (formData.has('replaceDocumentId')) {
+      if (!Number.isInteger(replacement) || replacement < 1)
+        return NextResponse.json({ error: 'Invalid replacement document.' }, { status: 400 })
+      admin = uploadUser
+      if (admin?.role !== 'admin')
+        return NextResponse.json({ error: 'Only admins can replace library PDFs.' }, { status: 403 })
+      await payload.findByID({ collection: 'documents', id: replacement, user: admin, overrideAccess: false })
     }
 
     // A module/topic selected by the learner wins. When nothing was chosen,
@@ -114,8 +91,12 @@ export async function POST(req: Request) {
       moduleName = existing.docs[0]?.name || ''
       moduleNumber = existing.docs[0]?.number || filenameInfo.moduleNumber
       if (!resolvedModuleId) {
+        if (uploadUser?.role !== 'admin')
+          return NextResponse.json({ error: 'Choose an existing module. Only admins can add curriculum folders.' }, { status: 400 })
         const created = await payload.create({
           collection: 'modules',
+          user: uploadUser,
+          overrideAccess: false,
           data: {
             subject: resolvedSubjectId,
             number: filenameInfo.moduleNumber,
@@ -132,11 +113,17 @@ export async function POST(req: Request) {
     if (topicId && Number.isFinite(parsedTopicId) && parsedTopicId > 0) {
       const topicDoc = await payload.findByID({ collection: 'topics', id: parsedTopicId, depth: 1 })
       const topicModuleId = typeof topicDoc.module === 'object' ? topicDoc.module?.id : topicDoc.module
+      const parentModule = await payload.findByID({ collection: 'modules', id: Number(topicModuleId), depth: 0 })
+      const parentSubject = typeof parentModule.subject === 'object' ? parentModule.subject?.id : parentModule.subject
+      if (Number(parentSubject) !== resolvedSubjectId)
+        return NextResponse.json({ error: 'The selected topic does not belong to this subject.' }, { status: 400 })
       if (resolvedModuleId && Number(topicModuleId) !== Number(resolvedModuleId)) {
         return NextResponse.json({ error: 'The selected topic does not belong to this module.' }, { status: 400 })
       }
       resolvedTopicId = parsedTopicId
       resolvedModuleId ||= Number(topicModuleId)
+      moduleName = parentModule.name
+      moduleNumber = parentModule.number
       topicName = topicDoc.name
       topicNumber = topicDoc.number
     } else if (resolvedModuleId && filenameInfo.topicNumber) {
@@ -154,8 +141,12 @@ export async function POST(req: Request) {
       topicName = existing.docs[0]?.name || ''
       topicNumber = existing.docs[0]?.number || filenameInfo.topicNumber
       if (!resolvedTopicId) {
+        if (uploadUser?.role !== 'admin')
+          return NextResponse.json({ error: 'Choose an existing topic. Only admins can add curriculum folders.' }, { status: 400 })
         const created = await payload.create({
           collection: 'topics',
+          user: uploadUser,
+          overrideAccess: false,
           data: {
             module: resolvedModuleId,
             number: filenameInfo.topicNumber,
@@ -176,40 +167,25 @@ export async function POST(req: Request) {
       topicNumber,
       topicName,
       originalFilename: file.name,
+      title: name.trim(),
     })
-
-    const arrayBuffer = await file.arrayBuffer()
-    const fileBuffer = Buffer.from(arrayBuffer)
-
-    // Ensure local destination media folder exists
-    const mediaDir = path.resolve(process.cwd(), 'media/documents')
-    if (!fs.existsSync(mediaDir)) {
-      fs.mkdirSync(mediaDir, { recursive: true })
-    }
 
     // Create document in Payload CMS
     // This automatically triggers the afterChange: [processDocument] hook
     // which uploads to Cloudflare R2, extracts diagrams, and indexes vector embeddings
-    const doc = await payload.create({
-      collection: 'documents',
-      data: {
-        name: name.trim(),
-        chapter: chapter.trim() || name.trim(),
-        type: (type as any) || 'Notes',
-        subject: resolvedSubjectId,
-        module: resolvedModuleId,
-        topic: resolvedTopicId,
-      },
-      file: {
-        data: fileBuffer,
-        name: downloadFilename,
-        mimetype: 'application/pdf',
-        size: fileBuffer.length,
-      },
-    })
+    const data = {
+      name: name.trim(), chapter: chapter.trim() || name.trim(),
+      type: type as 'Notes' | 'PYQs' | 'Assignments', subject: resolvedSubjectId,
+      module: resolvedModuleId, topic: resolvedTopicId,
+    }
+    const upload = { data: fileBuffer, name: downloadFilename, mimetype: 'application/pdf', size: fileBuffer.length }
+    const doc = replacement
+      ? await payload.update({ collection: 'documents', id: replacement, data, file: upload, user: admin, overrideAccess: false, context: { forceDocumentIngestion: true } })
+      : await payload.create({ collection: 'documents', data, file: upload })
 
     return NextResponse.json({
       success: true,
+      indexed: true,
       doc: {
         id: doc.id,
         name: doc.name,

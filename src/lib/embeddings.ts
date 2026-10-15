@@ -1,26 +1,50 @@
-import { createHash } from 'node:crypto'
-import { getCache, setCache, hashKey } from './redis'
+import path from 'node:path'
+import os from 'node:os'
+import { getOrSetCache, hashKey } from './redis'
 
-export async function getEmbedding(text: string): Promise<number[]> {
-  const clean = text.replace(/\n/g, ' ').trim()
-  const cacheKey = hashKey('emb', clean)
+export const EMBEDDING_MODEL = 'minilm-l6-v2-q8-v1'
+export const EMBEDDING_DIMENSIONS = 384
+type Extractor = Awaited<
+  ReturnType<typeof import('@huggingface/transformers').pipeline<'feature-extraction'>>
+>
+let extractor: Promise<Extractor> | undefined
 
-  // 1. Check Redis cache first (< 1ms)
-  const cached = await getCache<number[]>(cacheKey)
-  if (cached && Array.isArray(cached) && cached.length === 384) {
-    return cached
+function getExtractor() {
+  if (!extractor) {
+    extractor = (async () => {
+      const { pipeline, env } = await import('@huggingface/transformers')
+      env.cacheDir = path.join(
+        process.env.VERCEL ? os.tmpdir() : process.cwd(),
+        '.cache',
+        'embeddings',
+      )
+      return pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+        device: 'cpu',
+        dtype: 'q8',
+      })
+    })().catch((error) => {
+      extractor = undefined
+      throw error
+    })
   }
+  return extractor
+}
 
-  // Keep request-time Vercel functions free of native ONNX binaries. The
-  // deterministic 384-dim vector is stable/cacheable and can be replaced by
-  // a worker-backed model later without changing the retrieval schema.
-  const embedding = Array.from({ length: 384 }, (_, index) => {
-    const digest = createHash('sha256').update(`${clean}\0${index}`).digest()
-    return (digest.readInt16BE(index % 30) / 32768) * 0.25
-  })
-
-  // 3. Cache for 7 days (604800s)
-  await setCache(cacheKey, embedding, 604800)
-
-  return embedding
+/** The ONLY embedding path for both ingestion and queries. Never substitute hashes. */
+export async function getEmbedding(text: string): Promise<number[]> {
+  const clean = text.replace(/\s+/g, ' ').trim()
+  if (!clean) throw new Error('Cannot embed empty text.')
+  const result = await getOrSetCache(
+    hashKey(`emb:${EMBEDDING_MODEL}`, clean),
+    async () => {
+      const model = await getExtractor()
+      const output = await model(clean, { pooling: 'mean', normalize: true })
+      const vector = Array.from(output.data, Number)
+      if (vector.length !== EMBEDDING_DIMENSIONS || vector.some((value) => !Number.isFinite(value)))
+        throw new Error('Embedding model returned an invalid vector.')
+      return vector
+    },
+    604800,
+  )
+  return result.data
 }

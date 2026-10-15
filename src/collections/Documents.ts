@@ -4,6 +4,7 @@ import { deleteDocumentDependents } from '@/hooks/deleteDocumentDependents'
 import { invalidateDocumentAnswers } from '@/hooks/invalidateDocumentAnswers'
 import { syncDocumentMetadata } from '@/hooks/syncDocumentMetadata'
 import { adminOnly } from '@/access/admin'
+import { nameDocumentUpload } from '@/hooks/nameDocumentUpload'
 // Reading users or catalog metadata must not load the PDF/ML ingestion stack.
 const ingestDocument: CollectionAfterChangeHook = async (args) => {
   // Metadata edits must not re-upload/re-embed the entire PDF.
@@ -27,10 +28,17 @@ export const Documents: CollectionConfig = {
   },
   upload: {
     bulkUpload: true,
+    filesRequiredOnCreate: false,
     staticDir: 'media/documents',
     mimeTypes: ['application/pdf'],
   },
   hooks: {
+    beforeOperation: [nameDocumentUpload],
+    beforeValidate: [({ operation, req, context }) => {
+      // Metadata-only creation is reserved for our verified R2 upload processor.
+      if (operation === 'create' && !req.file && !Buffer.isBuffer(context.documentSource))
+        throw new Error('Upload a PDF file before creating this document.')
+    }],
     beforeDelete: [deleteDocumentDependents],
     afterChange: [ingestDocument, invalidateCatalog, invalidateDocumentAnswers],
     afterDelete: [invalidateCatalog, invalidateDocumentAnswers],
