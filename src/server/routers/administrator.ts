@@ -35,7 +35,8 @@ export const administratorRouter = router({
   ...createUploadProcedures(adminProcedure),
   uploadJobs: adminProcedure.query(async ({ ctx }) => {
     const result = await (ctx.payload.db as any).drizzle
-      .execute(sql`SELECT id, filename, status, progress, stage, error, document_id
+      .execute(sql`SELECT id, filename, status, progress, stage, error, document_id,
+      (status = 'running' AND updated_at < now() - interval '15 minutes') AS interrupted
       FROM document_upload_jobs ORDER BY created_at DESC LIMIT 30`)
     return result.rows as Array<{
       id: string
@@ -45,6 +46,7 @@ export const administratorRouter = router({
       stage: string
       error: string | null
       document_id: number | null
+      interrupted: boolean
     }>
   }),
   overview: adminProcedure.query(async ({ ctx }) => {

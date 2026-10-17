@@ -64,7 +64,15 @@ const nextConfig: NextConfig = {
       'node_modules/.pnpm/pdf-parse@*/node_modules/pdf-parse/package.json',
       'node_modules/.pnpm/pdf-parse@*/node_modules/pdf-parse/dist/pdf-parse/cjs/**',
       'node_modules/.pnpm/@napi-rs+canvas-linux-x64-gnu@*/node_modules/@napi-rs/canvas-linux-x64-gnu/**',
-      'node_modules/.pnpm/tesseract.js-core@*/node_modules/tesseract.js-core/*lstm*',
+      // getCore chooses SIMD/relaxed-SIMD and legacy/LSTM variants at runtime.
+      'node_modules/.pnpm/tesseract.js-core@*/node_modules/tesseract.js-core/tesseract-core*.js',
+      'node_modules/.pnpm/tesseract.js-core@*/node_modules/tesseract.js-core/tesseract-core*.wasm',
+      // Worker_threads entry points are not recursively traced by Next.
+      'node_modules/.pnpm/tesseract.js@*/node_modules/tesseract.js/src/**',
+      'node_modules/.pnpm/wasm-feature-detect@*/node_modules/wasm-feature-detect/**',
+      'node_modules/.pnpm/regenerator-runtime@*/node_modules/regenerator-runtime/**',
+      'node_modules/.pnpm/is-url@*/node_modules/is-url/**',
+      'node_modules/.pnpm/bmp-js@*/node_modules/bmp-js/**',
       'node_modules/.pnpm/pdfjs-dist@*/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs',
       'node_modules/.pnpm/pdfjs-dist@*/node_modules/pdfjs-dist/standard_fonts/**',
       'node_modules/.pnpm/pdfjs-dist@*/node_modules/pdfjs-dist/package.json',

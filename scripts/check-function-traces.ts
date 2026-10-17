@@ -25,6 +25,10 @@ for (const route of routes) {
       tracedMB: Math.round(files.reduce((n, f) => n + f.bytes, 0) / 1024 / 1024),
       linuxONNX: files.some((f) => /onnxruntime-node.*linux.*x64.*binding/.test(f.name)),
       ocrWorker: files.some((f) => /tesseract.js.*worker-script.*node.*index.js/.test(f.name)),
+      ocrWorkerParent: files.some((f) =>
+        /tesseract\.js.*worker-script[\\/]index\.js$/.test(f.name),
+      ),
+      ocrBitmapDecoder: files.some((f) => /bmp-js.*index\.js$/.test(f.name)),
       ocrWasm: files.some((f) => /tesseract.js-core.*\.wasm$/.test(f.name)),
       canvas: files.some((f) => /@napi-rs.*canvas/.test(f.name)),
       linuxCanvasBinding: files.some((f) => /canvas-linux-x64-gnu.*\.node$/.test(f.name)),

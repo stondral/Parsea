@@ -6,6 +6,9 @@ import type { OCRRecognition } from './ocrRecognition'
 export const createLocalOCRWorker = () =>
   createWorker('eng', undefined, {
     cachePath: process.env.VERCEL ? os.tmpdir() : process.cwd(),
+    // Tesseract otherwise throws job errors from its message event handler,
+    // outside the ingestion try/catch. Its rejected promise still reaches us.
+    errorHandler: (error) => console.error('OCR worker failed:', error),
   })
 
 /**

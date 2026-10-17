@@ -516,18 +516,22 @@ export function AdministratorWorkspace({
                         </div>
                         <div className="administrator-upload-state">
                           <span className="administrator-upload-badge" data-status={job.status}>
-                            {job.status === 'failed'
-                              ? 'Needs attention'
-                              : job.status === 'ready'
-                                ? 'Ready'
-                                : job.status === 'running'
-                                  ? 'Indexing'
-                                  : job.status === 'queued'
-                                    ? 'Queued'
-                                    : 'Uploading'}
+                            {job.interrupted
+                              ? 'Interrupted'
+                              : job.status === 'failed'
+                                ? 'Needs attention'
+                                : job.status === 'ready'
+                                  ? 'Ready'
+                                  : job.status === 'running'
+                                    ? 'Indexing'
+                                    : job.status === 'queued'
+                                      ? 'Queued'
+                                      : 'Uploading'}
                           </span>
                           <small>
-                            {job.stage} · {job.progress}%
+                            {job.interrupted
+                              ? 'No progress update for 15 minutes. Resume indexing to continue saved work.'
+                              : `${job.stage} · ${job.progress}%`}
                           </small>
                           <progress
                             aria-label={`Indexing progress for ${job.filename}`}
