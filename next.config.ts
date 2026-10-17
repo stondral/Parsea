@@ -67,6 +67,7 @@ const nextConfig: NextConfig = {
       'node_modules/.pnpm/tesseract.js-core@*/node_modules/tesseract.js-core/*lstm*',
       'node_modules/.pnpm/pdfjs-dist@*/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs',
       'node_modules/.pnpm/pdfjs-dist@*/node_modules/pdfjs-dist/standard_fonts/**',
+      'node_modules/.pnpm/pdfjs-dist@*/node_modules/pdfjs-dist/package.json',
     ],
   },
   outputFileTracingExcludes: {
