@@ -1,7 +1,10 @@
-import { extractTextFromImage, createLocalOCRWorker } from './ocr'
+import { recognizeImage, createLocalOCRWorker } from './ocr'
 import type { Worker } from 'tesseract.js'
 import { IngestionPending } from './ingestionControl'
 import { LowConfidenceOCRError } from './ocrRecognition'
+import { PAGE_ORIENTATION_VERSION, type PageOrientation } from './pageOrientation'
+import { createPDFOrientationHints } from './pdfOrientationHints'
+import { ensurePDFRuntime } from './pdfRuntime'
 
 export interface ExtractedPDFPage {
   pageNumber: number
@@ -9,9 +12,11 @@ export interface ExtractedPDFPage {
   screenshot?: Uint8Array
   ocr: boolean
   previewKey?: string
+  orientation?: PageOrientation
+  orientationVersion?: number
 }
 
-/** One parser per document, real Node canvas primitives, physical page numbering. */
+/** Canonical extraction renderer, optional public geometry inspector, real Node canvas. */
 export async function extractPDF(
   buffer: Buffer,
   options: {
@@ -27,9 +32,11 @@ export async function extractPDF(
     throw new Error('This file does not contain a valid PDF header.')
   if ('random' in Array.prototype)
     Object.defineProperty(Array.prototype, 'random', { enumerable: false })
+  await ensurePDFRuntime()
   const { PDFParse } = await import('pdf-parse')
   const parser = new PDFParse({ data: new Uint8Array(buffer), isEvalSupported: false })
   let worker: Worker | undefined
+  let hints: Awaited<ReturnType<typeof createPDFOrientationHints>> | undefined
   try {
     const info = await parser.getInfo()
     if (!Number.isInteger(info.total) || info.total < 1)
@@ -40,12 +47,19 @@ export async function extractPDF(
       )
     const text = await parser.getText({ pageJoiner: '' })
     const byPage = new Map(text.pages.map((page) => [page.num, page.text.trim()]))
+    if (text.pages.some((page) => page.text.trim().length >= 40)) {
+      try {
+        hints = await createPDFOrientationHints(buffer)
+      } catch {
+        await options.onProgress?.('Text orientation unavailable; retain original page direction.')
+      }
+    }
     const pages: ExtractedPDFPage[] = []
     let freshPages = 0,
       ocrPages = 0
     for (let pageNumber = 1; pageNumber <= info.total; pageNumber++) {
       const cached = options.cachedPage?.(pageNumber)
-      if (cached) {
+      if (cached && cached.orientationVersion === PAGE_ORIENTATION_VERSION) {
         await options.onPage?.(cached)
         pages.push(cached)
         continue
@@ -56,6 +70,16 @@ export async function extractPDF(
       let pageText = byPage.get(pageNumber) || ''
       let screenshot: Uint8Array | undefined
       let ocr = false
+      let orientation: PageOrientation = { rotation: 0, confidence: 0, verified: false }
+      if (pageText.length >= 40 && hints) {
+        try {
+          orientation = await hints.page(pageNumber)
+        } catch {
+          await options.onProgress?.(
+            `Page ${pageNumber}: orientation uncertain; use reader rotation controls if needed.`,
+          )
+        }
+      }
       // Previews cover vector diagrams too, not only embedded images.
       try {
         const shot = await parser.getScreenshot({
@@ -75,11 +99,13 @@ export async function extractPDF(
       if (pageText.length < 40 && screenshot) {
         if (ocrPages >= (options.maxOCRPages ?? Infinity)) throw new IngestionPending()
         ocrPages++
-        await options.onProgress?.(`Reading scanned page ${pageNumber} with OCR`)
+        await options.onProgress?.(`Reading scanned page ${pageNumber} / ${info.total} with OCR`)
         worker ||= await createLocalOCRWorker()
         let recognized = ''
         try {
-          recognized = await extractTextFromImage(screenshot, { preferLocal: true, worker })
+          const result = await recognizeImage(screenshot, { preferLocal: true, worker })
+          recognized = result.text
+          orientation = result
         } catch (error) {
           if (!(error instanceof LowConfidenceOCRError)) throw error
           // A diagram-only slide can resemble low-confidence OCR noise. Keep
@@ -95,7 +121,23 @@ export async function extractPDF(
           ocr = true
         }
       }
-      const page = { pageNumber, text: pageText, screenshot, ocr }
+      // PDFParse already applies PDF /Rotate metadata. This is only the extra
+      // content correction, shared with the reader; expand the canvas, never crop.
+      if (screenshot && orientation.rotation) {
+        const { default: sharp } = await import('sharp')
+        screenshot = await sharp(Buffer.from(screenshot))
+          .rotate(orientation.rotation)
+          .png()
+          .toBuffer()
+      }
+      const page = {
+        pageNumber,
+        text: pageText,
+        screenshot,
+        ocr,
+        orientation,
+        orientationVersion: PAGE_ORIENTATION_VERSION,
+      }
       await options.onPage?.(page)
       pages.push(page)
     }
@@ -109,7 +151,14 @@ export async function extractPDF(
       throw new Error('Password-protected PDFs are not supported. Upload an unlocked copy.')
     throw error
   } finally {
-    if (worker) await worker.terminate()
-    await parser.destroy()
+    try {
+      if (worker) await worker.terminate()
+    } finally {
+      try {
+        await hints?.destroy()
+      } finally {
+        await parser.destroy()
+      }
+    }
   }
 }

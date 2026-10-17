@@ -1,6 +1,7 @@
 import { createWorker, type Worker } from 'tesseract.js'
 import os from 'node:os'
 import { recognizeOCR } from './ocrRecognition'
+import type { OCRRecognition } from './ocrRecognition'
 
 export const createLocalOCRWorker = () =>
   createWorker('eng', undefined, {
@@ -16,6 +17,14 @@ export async function extractTextFromImage(
   imageBuffer: Buffer | Uint8Array,
   options: { preferLocal?: boolean; worker?: Worker } = {},
 ): Promise<string> {
+  return (await recognizeImage(imageBuffer, options)).text
+}
+
+/** Same recognizer, with orientation retained for PDF previews and metadata. */
+export async function recognizeImage(
+  imageBuffer: Buffer | Uint8Array,
+  options: { preferLocal?: boolean; worker?: Worker } = {},
+): Promise<OCRRecognition> {
   const base64Image = Buffer.from(imageBuffer).toString('base64')
   const apiKey = process.env.OPENROUTER_API_KEY
 
@@ -62,7 +71,7 @@ export async function extractTextFromImage(
         const data = await response.json()
         const text = data.choices?.[0]?.message?.content?.trim()
         if (text && text.length > 10) {
-          return text
+          return { text, rotation: 0, confidence: 0, verified: false }
         }
       }
     } catch (visionErr) {
@@ -86,6 +95,6 @@ export async function extractTextFromImage(
   } catch (tessErr) {
     if (options.worker) throw tessErr
     console.error('Local Tesseract OCR error:', tessErr)
-    return ''
+    return { text: '', rotation: 0, confidence: 0, verified: false }
   }
 }

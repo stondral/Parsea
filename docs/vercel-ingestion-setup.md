@@ -3,7 +3,7 @@
 The browser uploads directly to R2 and processes checkpointed page batches immediately. A cron invocation is a backup for queued work left behind after a tab closes; it is not an instant background service.
 
 1. Deploy with the Vercel project Root Directory set to `parsea` if your repository root is the parent folder.
-2. Apply Payload migrations, including `20261015_000000_resumable_ingestion`, against the same database used by Vercel. The configured local database has already received the additive schema through the maintenance script.
+2. Apply Payload migrations, including `20261015_000000_resumable_ingestion` and `20261015_010000_page_orientation`, against the same database used by Vercel. The configured local database has already received the additive schema through the maintenance script.
 3. In Vercel Project Settings → Environment Variables, add `CRON_SECRET` as a random secret of at least 32 characters for Production. Do not commit it or expose it through a `NEXT_PUBLIC_` variable.
 4. Merge the `crons` array from the appropriate example into the project's `vercel.json` (inside the configured root directory). Preserve any existing configuration:
    - Hobby: `vercel-cron.hobby.example.json`, one daily backup invocation at 03:00 UTC (08:30 India time, with platform timing variation).
@@ -24,3 +24,5 @@ Durability: completed page text and preview keys persist outside the final docum
 Migration rollback intentionally refuses to discard resumable upload state automatically. Review queued work and preserve checkpoints before any manual rollback.
 
 OCR coverage: diagram-only/low-confidence pages can be retained visually while other readable pages are indexed. Ready-job stage text reports the number of pages without searchable text. Such pages are not represented by invented OCR or semantic vectors; local OCR is not diagram interpretation. A wholly unreadable PDF still fails instead of reporting a usable index.
+
+Orientation: re-index existing PDFs from `/administrator` to regenerate upright source screenshots and publish per-page reader corrections. This uses durable replacement jobs and preserves original PDF bytes/IDs. The corrected PDF.js reader opens when current metadata exists, with manual rotate/reset controls for uncertain pages. Standard reader/download still uses the unchanged original; app rotation is not a rewritten PDF. Old-version checkpoints/previews are not reused. Re-index jobs can be resumed from Recent uploads after an interrupted connection.

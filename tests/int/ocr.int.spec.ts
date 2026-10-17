@@ -3,9 +3,16 @@ import { extractTextFromImage } from '@/lib/ocr'
 
 const mocks = vi.hoisted(() => ({ createWorker: vi.fn(), recognize: vi.fn(), terminate: vi.fn() }))
 vi.mock('tesseract.js', () => ({ createWorker: mocks.createWorker }))
+vi.mock('sharp', () => ({
+  default: () => ({ rotate: () => ({ png: () => ({ toBuffer: async () => Buffer.from([1]) }) }) }),
+}))
 
 describe('Canonical Tesseract fallback', () => {
-  afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.clearAllMocks() })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+    vi.clearAllMocks()
+  })
   function worker() {
     mocks.createWorker.mockResolvedValue({ recognize: mocks.recognize, terminate: mocks.terminate })
     mocks.terminate.mockResolvedValue(undefined)
@@ -16,7 +23,9 @@ describe('Canonical Tesseract fallback', () => {
     const fetch = vi.fn()
     vi.stubGlobal('fetch', fetch)
     mocks.recognize.mockResolvedValue({ data: { text: '  Truth tables and logic  ' } })
-    expect(await extractTextFromImage(new Uint8Array([1]), { preferLocal: true })).toBe('Truth tables and logic')
+    expect(await extractTextFromImage(new Uint8Array([1]), { preferLocal: true })).toBe(
+      'Truth tables and logic',
+    )
     expect(fetch).not.toHaveBeenCalled()
     expect(mocks.terminate).toHaveBeenCalledTimes(1)
   })

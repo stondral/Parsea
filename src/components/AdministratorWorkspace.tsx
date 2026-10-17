@@ -11,6 +11,7 @@ import { useDialogFocus } from '@/hooks/useDialogFocus'
 import { curriculum, type CurriculumCollection, type CurriculumItem } from '@/lib/adminCatalog'
 import type { inferRouterOutputs } from '@trpc/server'
 import type { AppRouter } from '@/server/routers/_app'
+import { finishIndexingJob } from '@/lib/directUpload'
 import '@/app/(frontend)/administrator/administrator.css'
 
 type DocumentItem = inferRouterOutputs<AppRouter>['administrator']['documents']['items'][number]
@@ -513,15 +514,18 @@ export function AdministratorWorkspace({
                         )}
                         {['queued', 'failed', 'running'].includes(job.status) && (
                           <button
-                            disabled={resumeUpload.isPending}
+                            disabled={resumeUpload.isPending || batchReindexing}
                             onClick={async () => {
+                              setBatchReindexing(true)
                               try {
-                                const result = await resumeUpload.mutateAsync({ id: job.id })
-                                if (result.status === 'failed')
-                                  fail(new Error(result.error || 'Indexing failed.'))
+                                await finishIndexingJob(job.id, (input) =>
+                                  resumeUpload.mutateAsync(input),
+                                )
                                 await refresh()
                               } catch (error) {
                                 fail(error)
+                              } finally {
+                                setBatchReindexing(false)
                               }
                             }}
                           >
@@ -553,7 +557,11 @@ export function AdministratorWorkspace({
                         for (const [index, id] of selected.entries()) {
                           setNotice(`Re-indexing PDF ${index + 1} of ${selected.length}…`)
                           try {
-                            await reindexDocument.mutateAsync({ id })
+                            const job = await reindexDocument.mutateAsync({ id })
+                            await uploadJobs.refetch()
+                            await finishIndexingJob(job.id, (input) =>
+                              resumeUpload.mutateAsync(input),
+                            )
                           } catch {
                             failed.push(id)
                           }
@@ -1171,7 +1179,7 @@ export function AdministratorWorkspace({
         <Dialog
           title="Index health"
           onClose={() => setHealth(null)}
-          busy={reindexDocument.isPending}
+          busy={reindexDocument.isPending || resumeUpload.isPending || batchReindexing}
         >
           <h3>{health.name}</h3>
           <dl className="administrator-health-details">
@@ -1190,8 +1198,8 @@ export function AdministratorWorkspace({
           </dl>
           {!health.hasCloudFile && (
             <p className="administrator-error">
-              No cloud PDF key is saved. Re-indexing can only recover this file if the original is
-              still available on this server; otherwise upload the original PDF again.
+              No cloud PDF key is saved. Use Replace PDF in Materials to restore the original;
+              re-indexing requires a readable cloud copy.
             </p>
           )}
           <p>
@@ -1209,31 +1217,44 @@ export function AdministratorWorkspace({
               {error}
             </p>
           )}
-          {reindexDocument.isPending && (
+          {(reindexDocument.isPending || resumeUpload.isPending || batchReindexing) && (
             <p role="status">
               Working through your PDF. Keep this window open until the server confirms indexing.
             </p>
           )}
           <footer>
-            <button disabled={reindexDocument.isPending} onClick={() => setHealth(null)}>
+            <button
+              disabled={reindexDocument.isPending || batchReindexing}
+              onClick={() => setHealth(null)}
+            >
               Done
             </button>
             <button
               className="administrator-primary"
-              disabled={reindexDocument.isPending}
+              disabled={reindexDocument.isPending || batchReindexing}
               onClick={async () => {
                 setError('')
+                setBatchReindexing(true)
                 try {
-                  await reindexDocument.mutateAsync({ id: health.id })
+                  const job = await reindexDocument.mutateAsync({ id: health.id })
+                  await uploadJobs.refetch()
+                  setNotice(
+                    'Re-index queued. Progress is saved in Recent uploads; the original remains available.',
+                  )
+                  const result = await finishIndexingJob(job.id, (input) =>
+                    resumeUpload.mutateAsync(input),
+                  )
                   setHealth(null)
-                  setNotice('Re-indexing confirmed. Updated counts are in Materials.')
+                  setNotice(`${result.stage}. Updated counts are in Materials.`)
                   await refresh()
                 } catch (e) {
                   fail(e)
+                } finally {
+                  setBatchReindexing(false)
                 }
               }}
             >
-              {reindexDocument.isPending ? 'Re-indexing…' : 'Re-index PDF'}
+              {reindexDocument.isPending || batchReindexing ? 'Re-indexing…' : 'Re-index PDF'}
             </button>
           </footer>
         </Dialog>

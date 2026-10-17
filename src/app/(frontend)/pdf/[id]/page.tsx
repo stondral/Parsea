@@ -5,6 +5,11 @@ import { notFound } from 'next/navigation'
 import { getPresignedDownloadUrl } from '@/lib/r2'
 import { PDFCircleSearch } from '@/components/PDFCircleSearch'
 import { buildDownloadFilename } from '@/lib/documentClassification'
+import {
+  PAGE_ORIENTATION_VERSION,
+  normalizeRotation,
+  type PageOrientation,
+} from '@/lib/pageOrientation'
 
 interface PDFPageProps {
   params: Promise<{ id: string }>
@@ -73,6 +78,26 @@ export default async function PDFViewerPage(props: PDFPageProps) {
   // Do not embed a known-invalid local endpoint and present its JSON as a PDF.
   const unavailableOnVercel = process.env.VERCEL === '1' && !isR2
 
+  const savedPages = await payload.find({
+    collection: 'document_pages',
+    depth: 0,
+    limit: 150,
+    sort: 'pageNumber',
+    where: {
+      and: [
+        { document: { equals: docId } },
+        { orientationVersion: { equals: PAGE_ORIENTATION_VERSION } },
+      ],
+    },
+  })
+  const orientations: Record<number, PageOrientation> = {}
+  for (const saved of savedPages.docs)
+    orientations[saved.pageNumber] = {
+      rotation: normalizeRotation(saved.orientationRotation || 0),
+      confidence: saved.orientationConfidence || 0,
+      verified: Boolean(saved.orientationVerified),
+    }
+
   const visualChunks = await payload.find({
     collection: 'chunks',
     depth: 0,
@@ -83,9 +108,19 @@ export default async function PDFViewerPage(props: PDFPageProps) {
     },
   })
 
+  // Versioned page previews also include visual-only pages, without invented chunks.
+  const visualEntries = savedPages.docs.length
+    ? savedPages.docs
+        .filter((page) => page.previewKey)
+        .map((page) => ({
+          imageUrl: page.previewKey,
+          pageNumber: page.pageNumber,
+          imageCaption: `Source page screenshot (Page ${page.pageNumber})`,
+        }))
+    : visualChunks.docs
   const visuals: ExtractedVisual[] = (
     await Promise.all(
-      visualChunks.docs.map(async (chunk: any) => {
+      visualEntries.map(async (chunk: any) => {
         if (!chunk.imageUrl) return null
 
         try {
@@ -164,6 +199,7 @@ export default async function PDFViewerPage(props: PDFPageProps) {
               subject={subjectName}
               branch={doc.subject?.semester?.branch?.name}
               semester={doc.subject?.semester?.number}
+              orientations={orientations}
             />
           )}
         </div>
@@ -172,8 +208,11 @@ export default async function PDFViewerPage(props: PDFPageProps) {
           <aside className="pdf-visuals-panel">
             <div className="pdf-visuals-heading">
               <span className="section-kicker">From this document</span>
-              <h2>Extracted visuals</h2>
-              <p>Diagrams and image-rich pages found during ingestion.</p>
+              <h2>Source page visuals</h2>
+              <p>
+                Page screenshots, including diagrams. Uncertain page directions can be adjusted in
+                the reader.
+              </p>
             </div>
 
             <div className="pdf-visual-list">

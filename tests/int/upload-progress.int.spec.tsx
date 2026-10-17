@@ -11,7 +11,8 @@ const mocks = vi.hoisted(() => ({
   process: vi.fn(),
   direct: vi.fn(),
 }))
-vi.mock('@/lib/directUpload', () => ({
+vi.mock('@/lib/directUpload', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/directUpload')>()),
   uploadPDFDirect: mocks.direct,
   smallPDFBase64: vi.fn(),
   PDFContentHash: vi.fn(async () => 'a'.repeat(64)),
@@ -114,6 +115,39 @@ describe('Honest optimistic upload progress', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Upload 1 PDF' }))
   }
+
+  it('saves later PDFs while indexing is pending, with only one indexing lane', async () => {
+    let finish!: (value: unknown) => void
+    mocks.prepare.mockImplementation(async (input: { requestId: string }) => ({
+      id: input.requestId,
+      url: 'https://cloud.test/upload',
+      status: 'uploading',
+    }))
+    mocks.process.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    render(<UploadNoteModal isOpen onClose={vi.fn()} initialSubjectId="1" />)
+    fireEvent.change(screen.getByLabelText('Choose PDF files'), {
+      target: {
+        files: ['first.pdf', 'second.pdf'].map(
+          (name) => new File(['pdf'], name, { type: 'application/pdf' }),
+        ),
+      },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Upload 2 PDFs' }))
+    await waitFor(() => expect(mocks.complete).toHaveBeenCalledTimes(2))
+    expect(mocks.process).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('2 of 2 safely uploaded')).toBeDefined()
+    expect(Number(screen.getByRole('progressbar').getAttribute('aria-valuenow'))).toBeLessThan(100)
+    await act(async () => finish({ status: 'ready', document_id: 7 }))
+    await waitFor(() => expect(mocks.process).toHaveBeenCalledTimes(2))
+    await waitFor(() =>
+      expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('100'),
+    )
+  })
 
   it('shows confirmed stages and 100% only after the index response', async () => {
     let resolve!: (value: unknown) => void

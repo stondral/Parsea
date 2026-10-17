@@ -6,6 +6,7 @@ import { adminOnly, adminOrSelf, adminRoleOnly } from '@/access/admin'
 
 const mocks = vi.hoisted(() => ({
   getRequestUser: vi.fn(),
+  queueReindex: vi.fn(),
   payload: {
     find: vi.fn(),
     findByID: vi.fn(),
@@ -20,6 +21,7 @@ vi.mock('@/lib/payloadAuth', () => ({
   getRequestUser: mocks.getRequestUser,
   isAdminUser: (user: any) => user?.role === 'admin',
 }))
+vi.mock('@/lib/reindexJob', () => ({ queueDocumentReindex: mocks.queueReindex }))
 const admin = { id: 1, role: 'admin', email: 'admin@example.test' }
 const caller = () =>
   administratorRouter.createCaller({ headers: new Headers({ cookie: 'session=example' }) })
@@ -113,17 +115,13 @@ describe('Administrator management (mocked services; no database writes)', () =>
     expect(mocks.payload.delete).toHaveBeenCalledTimes(2)
   })
 
-  it('retries indexing only via the canonical document hook and propagates failures', async () => {
+  it('queues resumable indexing through the canonical replacement path and propagates failures', async () => {
     mocks.payload.findByID.mockResolvedValue({ id: 2, name: 'Logic' })
-    mocks.payload.update.mockResolvedValue({ id: 2 })
+    mocks.queueReindex.mockResolvedValue({ id: 'job', status: 'queued' })
     await caller().reindexDocument({ id: 2 })
-    expect(mocks.payload.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: { forceDocumentIngestion: true, failOnIngestionError: true },
-        overrideAccess: false,
-      }),
-    )
-    mocks.payload.update.mockRejectedValueOnce(new Error('No readable text'))
+    expect(mocks.queueReindex).toHaveBeenCalledWith(mocks.payload, 2, admin)
+    expect(mocks.payload.update).not.toHaveBeenCalled()
+    mocks.queueReindex.mockRejectedValueOnce(new Error('No readable text'))
     await expect(caller().reindexDocument({ id: 2 })).rejects.toThrow('No readable text')
   })
 

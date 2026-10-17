@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto'
 import { sql } from 'drizzle-orm'
 import { DuplicateDocument, IngestionPending } from '@/lib/ingestionControl'
 import type { ExtractedPDFPage } from '@/lib/pdf-extraction'
+import { PAGE_ORIENTATION_VERSION, normalizeRotation } from '@/lib/pageOrientation'
 
 /** Canonical synchronous indexing. A successful upload means a usable index. */
 export const processDocument: CollectionAfterChangeHook = async ({
@@ -88,12 +89,12 @@ export const processDocument: CollectionAfterChangeHook = async ({
       semesterNumber: tags.semester,
       branchName: tags.branch,
     })
-    const versionFolder = `${storage.folder}/versions/${jobId || randomUUID()}`
+    const versionFolder = `${storage.folder}/versions/${jobId || randomUUID()}/orientation-v${PAGE_ORIENTATION_VERSION}`
     const visuals = new Map<number, string>()
     const checkpoints = new Map<number, ExtractedPDFPage>()
     if (jobId && lease) {
       const saved = await checkpointDB.execute(
-        sql`SELECT page_number, text, ocr, preview_key FROM document_upload_pages WHERE job_id = ${jobId}::uuid`,
+        sql`SELECT page_number, text, ocr, preview_key, orientation_rotation, orientation_confidence, orientation_verified, orientation_version FROM document_upload_pages WHERE job_id = ${jobId}::uuid AND orientation_version = ${PAGE_ORIENTATION_VERSION}`,
       )
       for (const row of saved.rows)
         checkpoints.set(Number(row.page_number), {
@@ -101,6 +102,12 @@ export const processDocument: CollectionAfterChangeHook = async ({
           text: row.text,
           ocr: row.ocr,
           previewKey: row.preview_key || undefined,
+          orientation: {
+            rotation: normalizeRotation(Number(row.orientation_rotation)),
+            confidence: Number(row.orientation_confidence),
+            verified: row.orientation_verified,
+          },
+          orientationVersion: Number(row.orientation_version),
         })
     }
     // Consume previews one page at a time; a large scan must not retain hundreds
@@ -131,10 +138,12 @@ export const processDocument: CollectionAfterChangeHook = async ({
         }
         if (jobId && lease && !checkpoints.has(page.pageNumber)) {
           const saved =
-            await checkpointDB.execute(sql`INSERT INTO document_upload_pages (job_id, page_number, text, ocr, preview_key)
-            SELECT id, ${page.pageNumber}, ${page.text}, ${page.ocr}, ${visuals.get(page.pageNumber) || null} FROM document_upload_jobs
+            await checkpointDB.execute(sql`INSERT INTO document_upload_pages (job_id, page_number, text, ocr, preview_key, orientation_rotation, orientation_confidence, orientation_verified, orientation_version)
+            SELECT id, ${page.pageNumber}, ${page.text}, ${page.ocr}, ${visuals.get(page.pageNumber) || null}, ${page.orientation?.rotation || 0}, ${page.orientation?.confidence || 0}, ${page.orientation?.verified || false}, ${PAGE_ORIENTATION_VERSION} FROM document_upload_jobs
             WHERE id = ${jobId}::uuid AND lease_token = ${lease}::uuid AND status = 'running'
-            ON CONFLICT (job_id, page_number) DO NOTHING RETURNING page_number`)
+            ON CONFLICT (job_id, page_number) DO UPDATE SET text = EXCLUDED.text, ocr = EXCLUDED.ocr, preview_key = EXCLUDED.preview_key,
+            orientation_rotation = EXCLUDED.orientation_rotation, orientation_confidence = EXCLUDED.orientation_confidence,
+            orientation_verified = EXCLUDED.orientation_verified, orientation_version = EXCLUDED.orientation_version RETURNING page_number`)
           if (!saved.rows.length)
             throw new Error('This indexing attempt lost its lease. Resume the active job.')
         }
@@ -185,18 +194,28 @@ export const processDocument: CollectionAfterChangeHook = async ({
         const duplicate =
           await db.execute(sql`SELECT document_id FROM document_upload_jobs WHERE dedup_key = ${key}
           AND status = 'ready' AND document_id IS NOT NULL AND id <> ${jobId}::uuid
-          AND EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = document_upload_jobs.document_id AND c.embedding_model = ${EMBEDDING_MODEL}) LIMIT 1`)
+          AND EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = document_upload_jobs.document_id AND c.embedding_model = ${EMBEDDING_MODEL})
+          AND EXISTS (SELECT 1 FROM document_pages p WHERE p.document_id = document_upload_jobs.document_id AND p.orientation_version = ${PAGE_ORIENTATION_VERSION}) LIMIT 1`)
         if (duplicate.rows[0]) throw new DuplicateDocument(Number(duplicate.rows[0].document_id))
       }
     }
     if (operation === 'update') await deleteDocumentDependents({ id: doc.id, req })
     for (const page of pages) {
-      // Blank pages are logged, not represented as searchable content.
-      if (page.text.trim().length <= 20) continue
+      // Preserve every physical page's orientation/visual, but never create
+      // searchable chunks out of blank/low-confidence OCR.
       await req.payload.create({
         collection: 'document_pages',
         req,
-        data: { document: doc.id, pageNumber: page.pageNumber, text: page.text },
+        data: {
+          document: doc.id,
+          pageNumber: page.pageNumber,
+          text: page.text,
+          orientationRotation: page.orientation?.rotation || 0,
+          orientationConfidence: page.orientation?.confidence || 0,
+          orientationVerified: page.orientation?.verified || false,
+          orientationVersion: PAGE_ORIENTATION_VERSION,
+          previewKey: visuals.get(page.pageNumber) || null,
+        },
       })
     }
     // Derived chunks have no write hooks. Bound bulk SQL avoids Payload lock

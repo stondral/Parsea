@@ -4,7 +4,12 @@ import React, { useEffect, useState, useRef, useId } from 'react'
 import { trpc } from '@/trpc/client'
 import { classifyDocumentFilename } from '@/lib/documentClassification'
 import { useDialogFocus } from '@/hooks/useDialogFocus'
-import { uploadPDFDirect, smallPDFBase64, PDFContentHash } from '@/lib/directUpload'
+import {
+  uploadPDFDirect,
+  smallPDFBase64,
+  PDFContentHash,
+  finishIndexingJob,
+} from '@/lib/directUpload'
 import './upload.css'
 
 interface UploadNoteModalProps {
@@ -25,6 +30,10 @@ interface UploadEntry {
   title: string
   status: 'ready' | 'uploading' | 'uploaded' | 'failed'
   error?: string
+  saved?: boolean
+  progress?: number
+  stage?: string
+  jobId?: string
 }
 
 function findLikelySubject(
@@ -64,7 +73,6 @@ export function UploadNoteModal({
   const [dragActive, setDragActive] = useState(false)
   const [autoStart, setAutoStart] = useState(true)
   const [jobId, setJobId] = useState('')
-  const [transferProgress, setTransferProgress] = useState(0)
   const submitting = useRef(false)
   const dialogRef = useRef<HTMLDivElement>(null)
   const fileInputId = useId()
@@ -99,10 +107,32 @@ export function UploadNoteModal({
   const pending = uploads.filter((entry) => entry.status !== 'uploaded')
   const firstFile = uploads[0]?.file
   const activeFile = uploads.find((entry) => entry.status === 'uploading')
-  const liveProgress = Math.max((transferProgress / 100) * 10, job.data?.progress || 0)
+  const saved = uploads.filter((entry) => entry.saved || entry.status === 'uploaded').length
   const batchPercent = uploads.length
-    ? Math.round(((completed + (activeFile ? liveProgress / 100 : 0)) / uploads.length) * 100)
+    ? Math.floor(uploads.reduce((sum, entry) => sum + (entry.progress || 0), 0) / uploads.length)
     : 0
+
+  function updateEntry(id: string, patch: Partial<UploadEntry>) {
+    setUploads((previous) =>
+      previous.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)),
+    )
+  }
+
+  useEffect(() => {
+    if (!job.data || job.data.id !== jobId) return
+    const data = job.data
+    setUploads((previous) =>
+      previous.map((entry) =>
+        entry.jobId === jobId && entry.status === 'uploading'
+          ? {
+              ...entry,
+              progress: Math.max(entry.progress || 20, Math.min(99, 20 + data.progress * 0.8)),
+              stage: data.stage,
+            }
+          : entry,
+      ),
+    )
+  }, [job.data, jobId])
 
   useEffect(() => {
     if (
@@ -200,16 +230,7 @@ export function UploadNoteModal({
   }
 
   async function finishIndexing(id: string) {
-    let result = await processUpload.mutateAsync({ id })
-    while (result.status === 'queued' || result.status === 'running') {
-      if (result.status === 'running')
-        await new Promise((resolve) => window.setTimeout(resolve, 1500))
-      result = await processUpload.mutateAsync({ id })
-    }
-    if (result.status !== 'ready')
-      throw new Error(
-        result.error || 'Indexing failed. Your uploaded file remains in recent uploads for retry.',
-      )
+    const result = await finishIndexingJob(id, (input) => processUpload.mutateAsync(input))
     await recent.refetch()
     return result
   }
@@ -229,6 +250,9 @@ export function UploadNoteModal({
     setError('')
     let successful = 0
     let failed = 0
+    // Transfer the next PDF while one indexing lane consumes saved files.
+    // Preparation stays serial to avoid racing inferred curriculum creation.
+    let indexing = Promise.resolve()
     for (const entry of pending) {
       setUploads((previous) =>
         previous.map((item) =>
@@ -237,8 +261,7 @@ export function UploadNoteModal({
       )
       try {
         {
-          setJobId('')
-          setTransferProgress(0)
+          updateEntry(entry.id, { progress: 0, stage: 'Checking PDF…' })
           const prepared = await prepareUpload.mutateAsync({
             requestId: entry.id,
             contentHash: await PDFContentHash(entry.file),
@@ -252,26 +275,45 @@ export function UploadNoteModal({
             topic: Number(topicId) || undefined,
             replaceDocumentId,
           })
-          setJobId(prepared.id)
+          updateEntry(entry.id, { jobId: prepared.id, stage: 'Uploading PDF…' })
           if (prepared.url) {
             try {
-              await uploadPDFDirect(prepared.url, entry.file, setTransferProgress)
+              await uploadPDFDirect(prepared.url, entry.file, (percent) =>
+                updateEntry(entry.id, {
+                  progress: percent * 0.2,
+                  stage: `Uploading PDF · ${percent}% transferred`,
+                }),
+              )
             } catch (error) {
               if (entry.file.size > 3 * 1024 * 1024) throw error
               await uploadSmallPDF.mutateAsync({
                 id: prepared.id,
                 base64: await smallPDFBase64(entry.file),
               })
-              setTransferProgress(100)
             }
           }
           await completeUpload.mutateAsync({ id: prepared.id })
-          await finishIndexing(prepared.id)
+          updateEntry(entry.id, {
+            saved: true,
+            progress: 20,
+            stage: 'Safely uploaded · waiting to index',
+          })
+          indexing = indexing.then(async () => {
+            setJobId(prepared.id)
+            updateEntry(entry.id, { stage: 'Reading the PDF…' })
+            try {
+              await finishIndexing(prepared.id)
+              successful++
+              updateEntry(entry.id, { status: 'uploaded', progress: 100, stage: 'Ready to study' })
+            } catch (error) {
+              failed++
+              updateEntry(entry.id, {
+                status: 'failed',
+                error: error instanceof Error ? error.message : 'Indexing failed.',
+              })
+            }
+          })
         }
-        successful++
-        setUploads((previous) =>
-          previous.map((item) => (item.id === entry.id ? { ...item, status: 'uploaded' } : item)),
-        )
       } catch (uploadError) {
         failed++
         setUploads((previous) =>
@@ -287,6 +329,7 @@ export function UploadNoteModal({
         )
       }
     }
+    await indexing
     setIsUploading(false)
     submitting.current = false
     if (successful) {
@@ -301,7 +344,7 @@ export function UploadNoteModal({
     }
     if (failed)
       setError(
-        `${failed} file${failed === 1 ? '' : 's'} couldn’t upload. Successful files stay saved; retry only the failed ones.`,
+        `${failed} file${failed === 1 ? '' : 's'} need attention. Safely uploaded files stay saved; retry resumes the failed steps.`,
       )
   }
 
@@ -314,7 +357,7 @@ export function UploadNoteModal({
       }}
     >
       <div
-        className="parsea-upload-dialog modal"
+        className="parsea-upload-dialog"
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
@@ -428,7 +471,7 @@ export function UploadNoteModal({
                 <div className="parsea-upload-progress-heading">
                   <strong>
                     {isUploading
-                      ? 'A little closer to a clearer library.'
+                      ? `${saved} of ${uploads.length} safely uploaded`
                       : `${completed} of ${uploads.length} PDFs saved`}
                   </strong>
                   <span>{batchPercent}%</span>
@@ -440,22 +483,24 @@ export function UploadNoteModal({
                   aria-valuemin={0}
                   aria-valuemax={100}
                   aria-label={'Confirmed batch upload progress'}
-                  aria-valuetext={`${completed} of ${uploads.length} PDFs saved`}
+                  aria-valuetext={`${saved} safely uploaded; ${completed} of ${uploads.length} ready to study`}
                 >
                   <span style={{ width: `${batchPercent}%` }} />
                 </div>
                 <p role="status" aria-live="polite">
                   {isUploading
-                    ? job.data?.stage || `Uploading PDF · ${transferProgress}% transferred`
+                    ? (job.data?.id === jobId ? job.data.stage : activeFile?.stage) ||
+                      'Preparing PDFs…'
                     : completed === uploads.length
                       ? 'All uploads confirmed. Your notes have a home.'
                       : 'Your PDFs are ready when you are.'}
                 </p>
                 {isUploading && (
                   <small>
-                    {completed} of {uploads.length} saved · {activeFile?.file.name}
+                    {completed} of {uploads.length} ready to study · {activeFile?.file.name}
                     <br />
-                    Live transfer and indexing stages. Completion is confirmed by the server.
+                    Live transfer and indexing stages. Overall percentage is stage-weighted; 100%
+                    requires server confirmation.
                   </small>
                 )}
               </div>
@@ -482,7 +527,7 @@ export function UploadNoteModal({
                       {entry.status === 'uploaded'
                         ? '✓ Uploaded'
                         : entry.status === 'uploading'
-                          ? 'Processing…'
+                          ? entry.stage || 'Preparing…'
                           : entry.status === 'failed'
                             ? entry.error
                             : `${(entry.file.size / (1024 * 1024)).toFixed(2)} MB · Ready`}
@@ -633,7 +678,9 @@ export function UploadNoteModal({
                 }
               >
                 {isUploading
-                  ? 'Uploading your notes…'
+                  ? saved === uploads.length
+                    ? 'Preparing your notes…'
+                    : 'Uploading your notes…'
                   : uploads.some((entry) => entry.status === 'failed')
                     ? `Retry ${pending.length} file${pending.length === 1 ? '' : 's'}`
                     : `Upload ${pending.length || ''} PDF${pending.length === 1 ? '' : 's'}`}

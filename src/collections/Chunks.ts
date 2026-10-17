@@ -1,9 +1,13 @@
 import type { CollectionConfig } from 'payload'
+import { adminOnly } from '@/access/admin'
 
 export const Chunks: CollectionConfig = {
   slug: 'chunks',
   access: {
     read: () => true,
+    create: adminOnly,
+    update: adminOnly,
+    delete: adminOnly,
   },
   fields: [
     { name: 'embeddingModel', type: 'text', admin: { readOnly: true } },

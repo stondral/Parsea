@@ -279,22 +279,7 @@ export const administratorRouter = router({
     }),
 
   reindexDocument: adminProcedure.input(z.object({ id })).mutation(async ({ ctx, input }) => {
-    const doc = await ctx.payload.findByID({
-      collection: 'documents',
-      id: input.id,
-      user: ctx.user,
-      overrideAccess: false,
-    })
-    // Explicit, authenticated retry through the ONE canonical ingestion hook.
-    await ctx.payload.update({
-      collection: 'documents',
-      id: input.id,
-      data: { name: doc.name },
-      user: ctx.user,
-      overrideAccess: false,
-      context: { forceDocumentIngestion: true, failOnIngestionError: true },
-    })
-    return { indexed: input.id }
+    return (await import('@/lib/reindexJob')).queueDocumentReindex(ctx.payload, input.id, ctx.user)
   }),
 
   deleteDocuments: adminProcedure

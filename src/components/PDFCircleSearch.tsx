@@ -10,6 +10,7 @@ import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
 import { trpc } from '@/trpc/client'
 import type { RAGResult } from '@/lib/rag'
+import { normalizeRotation, type PageOrientation } from '@/lib/pageOrientation'
 import {
   textInSelection,
   isClosedLasso,
@@ -25,6 +26,7 @@ interface Props {
   subject?: string
   branch?: string
   semester?: number
+  orientations?: Record<number, PageOrientation>
 }
 
 /** Opt-in browser-only selection; normal PDF streaming remains unchanged. */
@@ -35,8 +37,11 @@ export function PDFCircleSearch(props: Props) {
   const [answerError, setAnswerError] = useState('')
   const [searching, setSearching] = useState(false)
   const requestVersion = useRef(0)
-  const [active, setActive] = useState(false)
-  const [armed, setArmed] = useState(true)
+  const [active, setActive] = useState(
+    Boolean(props.orientations && Object.keys(props.orientations).length),
+  )
+  const [armed, setArmed] = useState(!active)
+  const [manualRotations, setManualRotations] = useState<Record<number, number>>({})
   const [page, setPage] = useState(props.initialPage)
   const [total, setTotal] = useState(0)
   const [size, setSize] = useState({ width: 0, height: 0 })
@@ -54,6 +59,10 @@ export function PDFCircleSearch(props: Props) {
   const drawing = useRef<SelectionPoint[] | null>(null)
   const drawingPointer = useRef<number | null>(null)
   const [revision, setRevision] = useState(0)
+  const savedOrientation = props.orientations?.[page]
+  const correction = normalizeRotation(
+    (savedOrientation?.rotation || 0) + (manualRotations[page] || 0),
+  )
 
   function clearAnswer() {
     requestVersion.current += 1
@@ -61,6 +70,10 @@ export function PDFCircleSearch(props: Props) {
     setAnswerError('')
     setSearching(false)
   }
+
+  useEffect(() => {
+    setPage(props.initialPage)
+  }, [props.initialPage])
 
   useEffect(() => {
     clearAnswer()
@@ -127,8 +140,9 @@ export function PDFCircleSearch(props: Props) {
       const pdfjs = await import('pdfjs-dist')
       const pdfPage = await document.getPage(page)
       if (cancelled || !canvas.current) return
-      const base = pdfPage.getViewport({ scale: 1 })
-      const viewport = pdfPage.getViewport({ scale: width / base.width })
+      const rotation = normalizeRotation((pdfPage.rotate || 0) + correction)
+      const base = pdfPage.getViewport({ scale: 1, rotation })
+      const viewport = pdfPage.getViewport({ scale: width / base.width, rotation })
       const target = canvas.current
       const dpi = Math.min(window.devicePixelRatio || 1, 2)
       target.width = Math.ceil(viewport.width * dpi)
@@ -174,7 +188,7 @@ export function PDFCircleSearch(props: Props) {
       cancelled = true
       render?.cancel()
     }
-  }, [active, page, width, revision])
+  }, [active, page, width, revision, correction])
 
   function location(event: React.PointerEvent<SVGSVGElement>) {
     const bounds = event.currentTarget.getBoundingClientRect()
@@ -283,7 +297,14 @@ export function PDFCircleSearch(props: Props) {
   return (
     <div className={`pdf-circle-reader${active ? ' is-active' : ''}`}>
       <div className="pdf-circle-toolbar">
-        <button type="button" onClick={() => setActive(!active)} aria-pressed={active}>
+        <button
+          type="button"
+          onClick={() => {
+            setActive(!active)
+            setArmed(true)
+          }}
+          aria-pressed={active}
+        >
           {active ? 'Standard reader' : 'Circle to search · Try it'}
         </button>
         {active && (
@@ -316,21 +337,55 @@ export function PDFCircleSearch(props: Props) {
             >
               →
             </button>
+            <button
+              type="button"
+              disabled={!ready}
+              aria-label="Rotate PDF page left"
+              onClick={() =>
+                setManualRotations((previous) => ({
+                  ...previous,
+                  [page]: (previous[page] || 0) - 90,
+                }))
+              }
+            >
+              ↶
+            </button>
+            <button
+              type="button"
+              disabled={!ready}
+              aria-label="Rotate PDF page right"
+              onClick={() =>
+                setManualRotations((previous) => ({
+                  ...previous,
+                  [page]: (previous[page] || 0) + 90,
+                }))
+              }
+            >
+              ↷
+            </button>
+            <button
+              type="button"
+              disabled={!ready || !manualRotations[page]}
+              onClick={() => setManualRotations((previous) => ({ ...previous, [page]: 0 }))}
+            >
+              Reset page rotation
+            </button>
           </>
         )}
       </div>
       {!active ? (
-        <iframe
-          src={`${props.url}#page=${props.initialPage}`}
-          title={props.title}
-          className="pdf-frame"
-        />
+        <iframe src={`${props.url}#page=${page}`} title={props.title} className="pdf-frame" />
       ) : (
         <>
           <p className="pdf-circle-hint">
-            Circle text or drag a box, review it, then tap Explain for an answer here. Use Scroll /
-            pan to move around the page. Nothing is sent until you ask.
+            Use Draw a circle to select a region, review it, then tap Explain. Rotation controls
+            affect this page only. Nothing is sent until you ask.
           </p>
+          {!savedOrientation?.verified && (
+            <p className="pdf-circle-hint">
+              Page direction is unconfirmed. Use ↶ / ↷ if needed; the original PDF is unchanged.
+            </p>
+          )}
           {error ? (
             <p className="pdf-circle-error" role="alert">
               {error}

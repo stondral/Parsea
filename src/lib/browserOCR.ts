@@ -59,18 +59,20 @@ export async function ocrPDFRegion(
   const { createWorker } = await import('tesseract.js')
   const worker = await createWorker('eng')
   try {
-    return await recognizeOCR(worker, await blob(crop), async (degrees) => {
-      const rotated = document.createElement('canvas')
-      rotated.width = degrees === 180 ? crop.width : crop.height
-      rotated.height = degrees === 180 ? crop.height : crop.width
-      const ctx = rotated.getContext('2d')!
-      ctx.fillStyle = 'white'
-      ctx.fillRect(0, 0, rotated.width, rotated.height)
-      ctx.translate(rotated.width / 2, rotated.height / 2)
-      ctx.rotate((degrees * Math.PI) / 180)
-      ctx.drawImage(crop, -crop.width / 2, -crop.height / 2)
-      return blob(rotated)
-    })
+    return (
+      await recognizeOCR(worker, await blob(crop), async (degrees) => {
+        const rotated = document.createElement('canvas')
+        rotated.width = degrees === 180 ? crop.width : crop.height
+        rotated.height = degrees === 180 ? crop.height : crop.width
+        const ctx = rotated.getContext('2d')!
+        ctx.fillStyle = 'white'
+        ctx.fillRect(0, 0, rotated.width, rotated.height)
+        ctx.translate(rotated.width / 2, rotated.height / 2)
+        ctx.rotate((degrees * Math.PI) / 180)
+        ctx.drawImage(crop, -crop.width / 2, -crop.height / 2)
+        return blob(rotated)
+      })
+    ).text
   } finally {
     await worker.terminate()
   }

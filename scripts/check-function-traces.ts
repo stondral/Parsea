@@ -27,6 +27,8 @@ for (const route of routes) {
       ocrWorker: files.some((f) => /tesseract.js.*worker-script.*node.*index.js/.test(f.name)),
       ocrWasm: files.some((f) => /tesseract.js-core.*\.wasm$/.test(f.name)),
       canvas: files.some((f) => /@napi-rs.*canvas/.test(f.name)),
+      linuxCanvasBinding: files.some((f) => /canvas-linux-x64-gnu.*\.node$/.test(f.name)),
+      pdfOrientationWorker: files.some((f) => /pdfjs-dist.*legacy.*pdf\.worker\.mjs$/.test(f.name)),
       largest: files
         .sort((a, b) => b.bytes - a.bytes)
         .slice(0, 5)

@@ -21,6 +21,8 @@
   max-width: 640px;
   max-height: calc(100dvh - 48px);
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #b7c2dd #f5f7fc;
   background: #fff;
   color: #3b4663;
   border: 1.5px solid #303d70;
@@ -85,7 +87,7 @@
   border-color: #738cbc;
   background: #edf2fc;
 }
-.parsea-upload-drop input {
+.parsea-upload-overlay .parsea-upload-drop input[type='file'] {
   position: absolute;
   inset: 0;
   opacity: 0;

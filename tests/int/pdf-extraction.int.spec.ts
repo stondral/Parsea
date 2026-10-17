@@ -9,6 +9,8 @@ const m = vi.hoisted(() => ({
   worker: vi.fn(),
   terminate: vi.fn(),
   ocr: vi.fn(),
+  hints: vi.fn(),
+  rotate: vi.fn(),
 }))
 vi.mock('pdf-parse', () => ({
   PDFParse: class {
@@ -18,7 +20,9 @@ vi.mock('pdf-parse', () => ({
     destroy = m.destroy
   },
 }))
-vi.mock('@/lib/ocr', () => ({ createLocalOCRWorker: m.worker, extractTextFromImage: m.ocr }))
+vi.mock('@/lib/ocr', () => ({ createLocalOCRWorker: m.worker, recognizeImage: m.ocr }))
+vi.mock('@/lib/pdfOrientationHints', () => ({ createPDFOrientationHints: m.hints }))
+vi.mock('sharp', () => ({ default: () => ({ rotate: m.rotate }) }))
 describe('Physical page extraction and OCR', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -30,7 +34,17 @@ describe('Physical page extraction and OCR', () => {
       pages: [{ pageNumber: partial[0], data: new Uint8Array([1]) }],
     }))
     m.worker.mockResolvedValue({ terminate: m.terminate })
-    m.ocr.mockResolvedValue('Readable scanned notes on logic, propositions and truth tables.')
+    m.ocr.mockResolvedValue({
+      text: 'Readable scanned notes on logic, propositions and truth tables.',
+      rotation: 0,
+      confidence: 95,
+      verified: true,
+    })
+    m.hints.mockResolvedValue({
+      page: async () => ({ rotation: 0, confidence: 100, verified: true }),
+      destroy: vi.fn(),
+    })
+    m.rotate.mockReturnValue({ png: () => ({ toBuffer: async () => Buffer.from([2]) }) })
   })
   it('OCRs omitted pages, reuses a worker, and preserves citation page numbers', async () => {
     const pages = await extractPDF(Buffer.from('%PDF-test'))
@@ -52,6 +66,7 @@ describe('Physical page extraction and OCR', () => {
         text: 'Saved page with readable academic text.',
         ocr: true,
         previewKey: `page-${pageNumber}`,
+        orientationVersion: 1,
       }),
     })
     expect(pages.length).toBe(3)
@@ -66,9 +81,45 @@ describe('Physical page extraction and OCR', () => {
     expect(saved).toHaveBeenCalledTimes(1)
     expect(m.terminate).toHaveBeenCalled()
   })
+  it('rotates native text previews using geometry without OCR and versions the result', async () => {
+    m.info.mockResolvedValue({ total: 1 })
+    m.text.mockResolvedValue({
+      pages: [
+        { num: 1, text: 'A native PDF text paragraph with sufficient academic information.' },
+      ],
+    })
+    m.hints.mockResolvedValue({
+      page: async () => ({ rotation: 270, confidence: 100, verified: true }),
+      destroy: vi.fn(),
+    })
+    const pages = await extractPDF(Buffer.from('%PDF-test'))
+    expect(m.ocr).not.toHaveBeenCalled()
+    expect(m.rotate).toHaveBeenCalledWith(270)
+    expect(pages[0]).toMatchObject({
+      orientationVersion: 1,
+      orientation: { rotation: 270, verified: true },
+    })
+    expect(pages[0].screenshot).toEqual(Buffer.from([2]))
+  })
+  it('regenerates old unversioned checkpoints rather than reusing sideways previews', async () => {
+    m.info.mockResolvedValue({ total: 1 })
+    m.text.mockResolvedValue({ pages: [] })
+    const pages = await extractPDF(Buffer.from('%PDF-test'), {
+      cachedPage: () => ({
+        pageNumber: 1,
+        text: 'Old saved page',
+        ocr: true,
+        previewKey: 'sideways',
+        orientationVersion: 0,
+      }),
+    })
+    expect(m.ocr).toHaveBeenCalledTimes(1)
+    expect(pages[0].orientationVersion).toBe(1)
+    expect(pages[0].previewKey).toBeUndefined()
+  })
   it('rejects blank scans, disposing all resources', async () => {
     m.text.mockResolvedValue({ pages: [] })
-    m.ocr.mockResolvedValue('')
+    m.ocr.mockResolvedValue({ text: '', rotation: 0, confidence: 0, verified: false })
     await expect(extractPDF(Buffer.from('%PDF-test'))).rejects.toThrow('No readable text')
     expect(m.destroy).toHaveBeenCalled()
     expect(m.terminate).toHaveBeenCalled()

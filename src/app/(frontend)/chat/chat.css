@@ -1,7 +1,7 @@
 /* A focused, fully featured study workspace. */
 .chat-navigation-rail {
   display: flex; flex-direction: column; align-items: center; gap: 24px;
-  flex: 0 0 72px; width: 72px; align-self: stretch; padding: 18px 8px;
+  flex: 0 0 64px; width: 64px; align-self: center; padding: 18px 6px;
   border: 1px solid #b6c3de; border-radius: 999px;
   background: #edf1f9ed; box-shadow: 0 5px 18px #303d7007;
 }
@@ -13,7 +13,7 @@
 .chat-rail-links button > span { font-size: 1.5rem; line-height: 1; }
 .chat-rail-links small { font-size: .54rem; }
 .chat-rail-links button:disabled { opacity: .4; cursor: not-allowed; }
-.chat-navigation-rail .chat-rail-account { margin: auto 0 4px; }
+.chat-navigation-rail .chat-rail-account { margin: 8px 0 4px; }
 .chat-rail-account .navbar-account-trigger { width: 44px; height: 44px; padding: 4px; justify-content: center; border-radius: 50%; border: 1px solid #c9d3e8; background: #fff; }
 .chat-rail-account :is(.navbar-account-copy, .navbar-account-chevron) { display: none; }
 .chat-rail-account .navbar-account-menu { top: auto; bottom: 0; left: calc(100% + 12px); right: auto; width: 190px; }

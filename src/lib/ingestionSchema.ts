@@ -28,3 +28,15 @@ CREATE TABLE IF NOT EXISTS document_upload_pages (
   preview_key text, PRIMARY KEY(job_id, page_number)
 );
 `
+
+export const pageOrientationSchemaSQL = `
+ALTER TABLE document_upload_pages ADD COLUMN IF NOT EXISTS orientation_rotation integer NOT NULL DEFAULT 0;
+ALTER TABLE document_upload_pages ADD COLUMN IF NOT EXISTS orientation_confidence double precision NOT NULL DEFAULT 0;
+ALTER TABLE document_upload_pages ADD COLUMN IF NOT EXISTS orientation_verified boolean NOT NULL DEFAULT false;
+ALTER TABLE document_upload_pages ADD COLUMN IF NOT EXISTS orientation_version integer NOT NULL DEFAULT 0;
+ALTER TABLE document_pages ADD COLUMN IF NOT EXISTS orientation_rotation numeric DEFAULT 0;
+ALTER TABLE document_pages ADD COLUMN IF NOT EXISTS orientation_confidence numeric DEFAULT 0;
+ALTER TABLE document_pages ADD COLUMN IF NOT EXISTS orientation_verified boolean DEFAULT false;
+ALTER TABLE document_pages ADD COLUMN IF NOT EXISTS orientation_version numeric DEFAULT 0;
+ALTER TABLE document_pages ADD COLUMN IF NOT EXISTS preview_key varchar;
+`

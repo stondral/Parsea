@@ -73,6 +73,11 @@
 .pdf-circle-page canvas {
   display: block;
 }
+/* Preserve the entire corrected page in source thumbnails; never crop diagrams. */
+.pdf-visual-card .pdf-visual-image-link img {
+  object-fit: contain;
+  background: #fff;
+}
 .pdf-circle-overlay {
   position: absolute;
   inset: 0;

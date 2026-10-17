@@ -9,7 +9,13 @@ vi.mock('payload', () => ({
 }))
 vi.mock('@/lib/r2', () => ({ getPresignedDownloadUrl: mocks.presign }))
 vi.mock('@/components/PDFCircleSearch', () => ({
-  PDFCircleSearch: ({ url }: { url: string }) => <iframe src={url} title="PDF reader" />,
+  PDFCircleSearch: ({
+    url,
+    orientations,
+  }: {
+    url: string
+    orientations?: Record<number, { rotation: number }>
+  }) => <iframe src={url} title="PDF reader" data-rotation={orientations?.[1]?.rotation || 0} />,
 }))
 vi.mock('next/navigation', () => ({
   notFound: () => {
@@ -22,7 +28,7 @@ describe('Vercel PDF storage guard', () => {
     cleanup()
     vi.unstubAllEnvs()
   })
-  async function setup(storageKey?: string) {
+  async function setup(storageKey?: string, pages: unknown[] = []) {
     vi.stubEnv('VERCEL', '1')
     mocks.findByID.mockResolvedValue({
       id: 7,
@@ -31,7 +37,9 @@ describe('Vercel PDF storage guard', () => {
       storageKey,
       subject: { name: 'Discrete Mathematics' },
     })
-    mocks.find.mockResolvedValue({ docs: [] })
+    mocks.find.mockImplementation(async ({ collection }) => ({
+      docs: collection === 'document_pages' ? pages : [],
+    }))
     mocks.presign.mockResolvedValue('https://storage.example.test/Logic.pdf')
     return render(
       await PDFViewerPage({
@@ -53,5 +61,21 @@ describe('Vercel PDF storage guard', () => {
     )
     expect(screen.getByRole('link', { name: 'Download PDF' })).toBeDefined()
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+  it('passes versioned orientation to the reader and includes visual-only page screenshots', async () => {
+    await setup('documents/Logic.pdf', [
+      {
+        pageNumber: 1,
+        text: '',
+        previewKey: 'documents/visual-only.png',
+        orientationRotation: 90,
+        orientationVersion: 1,
+        orientationConfidence: 95,
+        orientationVerified: true,
+      },
+    ])
+    expect(screen.getByTitle('PDF reader').getAttribute('data-rotation')).toBe('90')
+    expect(screen.getByAltText('Source page screenshot (Page 1)')).toBeDefined()
+    expect(screen.getByRole('heading', { name: 'Source page visuals' })).toBeDefined()
   })
 })

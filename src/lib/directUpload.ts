@@ -42,3 +42,18 @@ export async function PDFContentHash(file: File): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer())
   return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('')
 }
+
+/** Browser continuation for both upload and re-index UIs; cron can resume later. */
+export async function finishIndexingJob<T extends { status: string; error: string | null }>(
+  id: string,
+  process: (input: { id: string }) => Promise<T>,
+): Promise<T> {
+  let result = await process({ id })
+  while (result.status === 'queued' || result.status === 'running') {
+    if (result.status === 'running') await new Promise((resolve) => setTimeout(resolve, 1500))
+    result = await process({ id })
+  }
+  if (result.status !== 'ready')
+    throw new Error(result.error || 'Indexing needs attention. Resume from recent uploads.')
+  return result
+}

@@ -9,6 +9,7 @@ import { relationId } from '@/lib/adminCatalog'
 import type { UploadMetadata } from '@/lib/uploadJobs'
 import { createHash } from 'node:crypto'
 import { EMBEDDING_MODEL } from '@/lib/embeddings'
+import { PAGE_ORIENTATION_VERSION } from '@/lib/pageOrientation'
 const id = z.number().int().positive()
 const name = z.string().trim().min(1).max(200)
 
@@ -197,7 +198,8 @@ export function createUploadProcedures(procedure: typeof authenticatedProcedure)
         if (dedup) {
           const same = await db.execute(sql`SELECT j.id, j.filename FROM document_upload_jobs j
           WHERE j.dedup_key = ${dedup} AND j.status = 'ready' AND j.document_id IS NOT NULL
-          AND EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = j.document_id AND c.embedding_model = ${EMBEDDING_MODEL}) LIMIT 1`)
+          AND EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = j.document_id AND c.embedding_model = ${EMBEDDING_MODEL})
+          AND EXISTS (SELECT 1 FROM document_pages p WHERE p.document_id = j.document_id AND p.orientation_version = ${PAGE_ORIENTATION_VERSION}) LIMIT 1`)
           if (same.rows[0])
             return {
               id: String(same.rows[0].id),

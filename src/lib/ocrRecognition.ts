@@ -1,31 +1,54 @@
 import type { Worker } from 'tesseract.js'
+import type { PageOrientation, PageRotation } from './pageOrientation'
 type OCRImage = Parameters<Worker['recognize']>[0]
 
 export class LowConfidenceOCRError extends Error {}
+export interface OCRRecognition extends PageOrientation {
+  text: string
+}
 
 /** Shared OCR recognition/quality/timeout contract for server PDFs and browser crops. */
 export async function recognizeOCR(
   worker: Worker,
   image: OCRImage,
   rotate?: (degrees: number) => Promise<OCRImage>,
-) {
+): Promise<OCRRecognition> {
   let timeout: ReturnType<typeof setTimeout> | undefined
   try {
     const result = await Promise.race([
       (async () => {
-        let best = await worker.recognize(image)
-        if ((best.data.confidence ?? 100) < 65 && rotate) {
+        const original = await worker.recognize(image)
+        let best = original
+        let rotation: PageRotation = 0
+        if (rotate) {
           for (const degrees of [90, 270, 180]) {
             const candidate = await worker.recognize(await rotate(degrees))
-            if (candidate.data.confidence > best.data.confidence) best = candidate
-            if (best.data.confidence >= 75) break
+            if (candidate.data.confidence > (best.data.confidence ?? 0)) {
+              best = candidate
+              rotation = degrees as PageRotation
+            }
           }
+        }
+        const confidence = best.data.confidence ?? 0
+        const verified =
+          confidence >= 65 &&
+          (best.data.text.match(/\p{L}/gu) || []).length >= 15 &&
+          (rotation === 0 || confidence - (original.data.confidence ?? 0) >= 10)
+        // Ambiguous orientation must not silently rotate a page or choose noise.
+        if (rotation && !verified) {
+          best = original
+          rotation = 0
         }
         if (best.data.text.trim().length > 20 && (best.data.confidence ?? 100) < 40)
           throw new LowConfidenceOCRError(
             'OCR could not read this scan reliably. Upload a clearer or correctly rotated PDF.',
           )
-        return best.data.text.trim()
+        return {
+          text: best.data.text.trim(),
+          rotation,
+          confidence: best.data.confidence ?? 0,
+          verified,
+        }
       })(),
       new Promise<never>((_, reject) => {
         timeout = setTimeout(

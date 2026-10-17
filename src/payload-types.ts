@@ -320,6 +320,11 @@ export interface DocumentPage {
   document: number | Document;
   pageNumber: number;
   text?: string | null;
+  orientationRotation?: number | null;
+  orientationConfidence?: number | null;
+  orientationVerified?: boolean | null;
+  orientationVersion?: number | null;
+  previewKey?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -625,6 +630,11 @@ export interface DocumentPagesSelect<T extends boolean = true> {
   document?: T;
   pageNumber?: T;
   text?: T;
+  orientationRotation?: T;
+  orientationConfidence?: T;
+  orientationVerified?: T;
+  orientationVersion?: T;
+  previewKey?: T;
   updatedAt?: T;
   createdAt?: T;
 }
