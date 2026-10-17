@@ -1,5 +1,15 @@
 # Parsea — Documentation, Architecture & AI Agent Rules
 
+- PDF deployment hardening (2026-10-17): canonical extraction now calls pdfParser.loadPDFParser, which initializes real canvas before Node createRequire loads pdf-parse's CJS export. This removes the generated asynchronous external ESM wrapper from the parser boundary. Explicit tracing includes CJS parser files and PDF.js standard fonts; both rendering and geometry inspection receive the font directory. Ten extraction tests and the six-page real rendering fixture pass; production build passes. This is a local mitigation for the reported Vercel failure, not proof of its deployed root cause or successful production recovery. Redeploy then resume existing jobs; retain uploaded originals.
+
+- Administrator recent uploads formatting (2026-10-17): dedicated responsive rows separate readable filenames, status/progress and actions. Full errors remain available in expandable details. Display-only underscore spacing does not rename stored files. Mobile rows stack; TypeScript passes. No live browser verification performed.
+
+## Login persistence update (2026-10-17)
+
+- Payload user creation does not log in. Signup now explicitly logs in after creation and verifies the browser cookie using an uncached credentialed /api/users/me request before navigation. A failed login retry does not create the account again. Session tokens are never stored in localStorage.
+- Users auth explicitly expires after seven days instead of the default two hours. Payload issues HttpOnly, path-root, host-only cookies with SameSite=Lax and Secure in production. Logout/revocation remains Payload-managed. Existing cookies retain their old expiry until the next login; separate preview/custom domains do not share sessions.
+- Navbar identity is rechecked without cache on route changes; chat identity lookup is uncached too. Three isolated auth tests cover signup/login/verification order, missing-cookie handling, and safe signup retry. Production cookies require verification after deployment; no live account login was performed.
+
 ## PDF runtime and upload feedback update (2026-10-17)
 
 - Validation for this update: 23 focused upload/parser/chat tests pass, including transfer/index overlap; frozen-lockfile offline install and the production build (including TypeScript) pass. Browser visual verification was not performed.

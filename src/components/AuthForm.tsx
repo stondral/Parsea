@@ -22,6 +22,7 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [error, setError] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
+  const [accountCreated, setAccountCreated] = useState(false)
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -29,8 +30,9 @@ export function AuthForm({ mode }: AuthFormProps) {
     setIsSubmitting(true)
 
     try {
-      const endpoint = isSignup ? '/api/users' : '/api/users/login'
-      const body = isSignup
+      const creatingAccount = isSignup && !accountCreated
+      const endpoint = creatingAccount ? '/api/users' : '/api/users/login'
+      const body = creatingAccount
         ? {
             name: name.trim(),
             email: email.trim(),
@@ -41,6 +43,8 @@ export function AuthForm({ mode }: AuthFormProps) {
         : { email: email.trim(), password }
       const response = await fetch(endpoint, {
         method: 'POST',
+        credentials: 'include',
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
@@ -51,6 +55,28 @@ export function AuthForm({ mode }: AuthFormProps) {
           data?.errors?.[0]?.message || data?.message || 'Something went wrong. Please try again.'
         throw new Error(message)
       }
+
+      if (creatingAccount) {
+        // Creating a Payload user does not establish a browser session.
+        // Remember success so a failed login retry cannot create a duplicate account.
+        setAccountCreated(true)
+        const login = await fetch('/api/users/login', {
+          method: 'POST',
+          credentials: 'include',
+          cache: 'no-store',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email.trim(), password }),
+        })
+        if (!login.ok) throw new Error('Your account was created. Please try signing in again.')
+      }
+      const session = await fetch('/api/users/me', { credentials: 'include', cache: 'no-store' })
+      if (!session.ok)
+        throw new Error('Could not verify your session. Please try signing in again.')
+      const current = await session.json()
+      if (!current.user)
+        throw new Error(
+          'Your browser did not retain the sign-in cookie. Allow cookies for this site and try again.',
+        )
 
       router.push('/')
       router.refresh()
@@ -154,7 +180,7 @@ export function AuthForm({ mode }: AuthFormProps) {
                   <input
                     value={name}
                     onChange={(event) => setName(event.target.value)}
-                    disabled={isSubmitting}
+                    disabled={isSubmitting || accountCreated}
                     required
                     autoComplete="name"
                     placeholder="Your name"
@@ -167,7 +193,7 @@ export function AuthForm({ mode }: AuthFormProps) {
                   type="email"
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || accountCreated}
                   required
                   autoComplete="email"
                   placeholder="you@college.edu"

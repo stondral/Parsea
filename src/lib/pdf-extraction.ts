@@ -4,7 +4,7 @@ import { IngestionPending } from './ingestionControl'
 import { LowConfidenceOCRError } from './ocrRecognition'
 import { PAGE_ORIENTATION_VERSION, type PageOrientation } from './pageOrientation'
 import { createPDFOrientationHints } from './pdfOrientationHints'
-import { ensurePDFRuntime } from './pdfRuntime'
+import { loadPDFParser, pdfStandardFontPath } from './pdfParser'
 
 export interface ExtractedPDFPage {
   pageNumber: number
@@ -32,9 +32,12 @@ export async function extractPDF(
     throw new Error('This file does not contain a valid PDF header.')
   if ('random' in Array.prototype)
     Object.defineProperty(Array.prototype, 'random', { enumerable: false })
-  await ensurePDFRuntime()
-  const { PDFParse } = await import('pdf-parse')
-  const parser = new PDFParse({ data: new Uint8Array(buffer), isEvalSupported: false })
+  const { PDFParse } = await loadPDFParser()
+  const parser = new PDFParse({
+    data: new Uint8Array(buffer),
+    isEvalSupported: false,
+    standardFontDataUrl: pdfStandardFontPath(),
+  })
   let worker: Worker | undefined
   let hints: Awaited<ReturnType<typeof createPDFOrientationHints>> | undefined
   try {

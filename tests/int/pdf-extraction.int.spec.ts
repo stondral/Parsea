@@ -12,13 +12,16 @@ const m = vi.hoisted(() => ({
   hints: vi.fn(),
   rotate: vi.fn(),
 }))
-vi.mock('pdf-parse', () => ({
-  PDFParse: class {
-    getInfo = m.info
-    getText = m.text
-    getScreenshot = m.shot
-    destroy = m.destroy
-  },
+vi.mock('@/lib/pdfParser', () => ({
+  pdfStandardFontPath: () => '/test-fonts/',
+  loadPDFParser: async () => ({
+    PDFParse: class {
+      getInfo = m.info
+      getText = m.text
+      getScreenshot = m.shot
+      destroy = m.destroy
+    },
+  }),
 }))
 vi.mock('@/lib/ocr', () => ({ createLocalOCRWorker: m.worker, recognizeImage: m.ocr }))
 vi.mock('@/lib/pdfOrientationHints', () => ({ createPDFOrientationHints: m.hints }))

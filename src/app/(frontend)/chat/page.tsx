@@ -634,7 +634,7 @@ function ChatWorkspace() {
     let active = true
     const loadChatWorkspace = async () => {
       try {
-        const meResponse = await fetch('/api/users/me', { credentials: 'include' })
+        const meResponse = await fetch('/api/users/me', { credentials: 'include', cache: 'no-store' })
         const meData = meResponse.ok ? await meResponse.json() : null
         if (!active) return
         const user = meData?.user

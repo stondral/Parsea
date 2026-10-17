@@ -33,7 +33,7 @@ export function LMSNavbar({
 
   useEffect(() => {
     let active = true
-    fetch('/api/users/me', { credentials: 'include' })
+    fetch('/api/users/me', { credentials: 'include', cache: 'no-store' })
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => {
         if (active) setCurrentUser(data?.user || null)
@@ -47,7 +47,7 @@ export function LMSNavbar({
     return () => {
       active = false
     }
-  }, [])
+  }, [pathname])
 
   const isChat = pathname === '/chat'
   const isNotes = pathname === '/notes'

@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises'
-import { PDFParse } from 'pdf-parse'
+import { loadPDFParser } from '../src/lib/pdfParser'
 import { createLocalOCRWorker } from '../src/lib/ocr'
 import sharp from 'sharp'
 
@@ -7,6 +7,7 @@ const filename = process.argv[2]
 const pageNumber = Number(process.argv[3])
 if (!filename || !Number.isInteger(pageNumber) || pageNumber < 1)
   throw new Error('Pass a PDF path and a physical page number.')
+const { PDFParse } = await loadPDFParser()
 const parser = new PDFParse({
   data: new Uint8Array(await fs.readFile(filename)),
   isEvalSupported: false,

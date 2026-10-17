@@ -567,3 +567,111 @@
     padding: 10px;
   }
 }
+.administrator-upload-jobs {
+  margin: 24px;
+  border: 1px solid #dce3f1;
+  border-radius: 18px;
+  overflow: hidden;
+  text-align: left;
+  background: #fff;
+}
+.administrator-upload-jobs > summary {
+  padding: 18px 20px;
+  background: #f3f5fb;
+  color: #354365;
+  font-weight: 600;
+  cursor: pointer;
+}
+.administrator-upload-jobs > p {
+  padding: 0 20px;
+  margin: 14px 0;
+  color: #64728d;
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+.administrator-upload-job {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(170px, 230px) 160px;
+  align-items: start;
+  gap: 24px;
+  padding: 20px;
+  border-top: 1px solid #e5eaf4;
+}
+.administrator-upload-file {
+  min-width: 0;
+}
+.administrator-upload-file > strong {
+  display: block;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  font-weight: 550;
+  color: #354365;
+  overflow-wrap: anywhere;
+}
+.administrator-upload-state {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.administrator-upload-state small {
+  color: #64728d;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.administrator-upload-badge {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: #edf1fb;
+  color: #49618e;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.administrator-upload-badge[data-status='failed'] {
+  background: #fff0f1;
+  color: #a54357;
+}
+.administrator-upload-badge[data-status='ready'] {
+  background: #eaf5ef;
+  color: #35654e;
+}
+.administrator-upload-state progress {
+  width: 100%;
+  height: 6px;
+  accent-color: #7488b9;
+}
+.administrator-upload-error {
+  margin-top: 10px;
+  font-size: 0.75rem;
+  color: #a54357;
+}
+.administrator-upload-error summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.administrator-upload-error p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+  padding: 12px;
+  background: #fff5f6;
+  border-radius: 10px;
+}
+.administrator-row-actions.administrator-upload-actions {
+  min-width: 0;
+  justify-content: flex-end;
+  margin: 0;
+}
+@media (max-width: 800px) {
+  .administrator-upload-jobs {
+    margin: 16px;
+  }
+  .administrator-upload-job {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+    padding: 16px;
+  }
+  .administrator-upload-actions {
+    justify-content: flex-start;
+  }
+}

@@ -497,41 +497,69 @@ export function AdministratorWorkspace({
             {tab === 'Materials' && (
               <>
                 {Boolean(uploadJobs.data?.length) && (
-                  <details className="administrator-empty" open>
+                  <details className="administrator-upload-jobs" open>
                     <summary>Recent uploads · live indexing status</summary>
                     <p>
                       Uploads stay recorded if you close this page. Resume a queued or failed job
                       here. Interrupted jobs can be retried after 15 minutes.
                     </p>
                     {uploadJobs.data?.map((job) => (
-                      <div key={job.id} className="administrator-row-actions">
-                        <span>
-                          {job.filename} · {job.stage} · {job.progress}%
-                          {job.error ? ` · ${job.error}` : ''}
-                        </span>
-                        {job.document_id && (
-                          <Link href={`/pdf/${job.document_id}`}>Read PDF ↗</Link>
-                        )}
-                        {['queued', 'failed', 'running'].includes(job.status) && (
-                          <button
-                            disabled={resumeUpload.isPending || batchReindexing}
-                            onClick={async () => {
-                              setBatchReindexing(true)
-                              try {
-                                await finishIndexingJob(job.id, (input) =>
-                                  resumeUpload.mutateAsync(input),
-                                )
-                                await refresh()
-                              } catch (error) {
-                                fail(error)
-                              } finally {
-                                setBatchReindexing(false)
-                              }
-                            }}
-                          >
-                            Resume indexing
-                          </button>
-                        )}
+                      <div key={job.id} className="administrator-upload-job">
+                        <div className="administrator-upload-file">
+                          <strong>{job.filename.replace(/_/g, ' ')}</strong>
+                          {job.error && (
+                            <details className="administrator-upload-error">
+                              <summary>View error details</summary>
+                              <p>{job.error}</p>
+                            </details>
+                          )}
+                        </div>
+                        <div className="administrator-upload-state">
+                          <span className="administrator-upload-badge" data-status={job.status}>
+                            {job.status === 'failed'
+                              ? 'Needs attention'
+                              : job.status === 'ready'
+                                ? 'Ready'
+                                : job.status === 'running'
+                                  ? 'Indexing'
+                                  : job.status === 'queued'
+                                    ? 'Queued'
+                                    : 'Uploading'}
+                          </span>
+                          <small>
+                            {job.stage} · {job.progress}%
+                          </small>
+                          <progress
+                            aria-label={`Indexing progress for ${job.filename}`}
+                            value={job.progress}
+                            max={100}
+                          />
+                        </div>
+                        <div className="administrator-row-actions administrator-upload-actions">
+                          {job.document_id && (
+                            <Link href={`/pdf/${job.document_id}`}>Read PDF ↗</Link>
+                          )}
+                          {['queued', 'failed', 'running'].includes(job.status) && (
+                            <button
+                              disabled={resumeUpload.isPending || batchReindexing}
+                              onClick={async () => {
+                                setBatchReindexing(true)
+                                try {
+                                  await finishIndexingJob(job.id, (input) =>
+                                    resumeUpload.mutateAsync(input),
+                                  )
+                                  await refresh()
+                                } catch (error) {
+                                  fail(error)
+                                } finally {
+                                  setBatchReindexing(false)
+                                }
+                              }}
+                            >
+                              Resume indexing
+                            </button>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </details>
