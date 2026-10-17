@@ -52,6 +52,8 @@ const nextConfig: NextConfig = {
     'dotenv',
   ],
 
+  // Include physical pnpm store paths only. Root package aliases are directory
+  // symlinks; explicitly including their descendants can invalidate Vercel packages.
   // Explicit Linux CPU binding: Transformers resolves native ONNX dynamically.
   outputFileTracingIncludes: {
     '/*': [
@@ -59,8 +61,6 @@ const nextConfig: NextConfig = {
       'node_modules/.pnpm/onnxruntime-node@*/node_modules/onnxruntime-node/package.json',
       'node_modules/.pnpm/onnxruntime-node@*/node_modules/onnxruntime-node/bin/napi-v*/linux/x64/*',
       'node_modules/.pnpm/@napi-rs+canvas@*/node_modules/@napi-rs/canvas/**',
-      'node_modules/@napi-rs/canvas/**',
-      'node_modules/@napi-rs/canvas-linux-x64-gnu/**',
       'node_modules/.pnpm/pdf-parse@*/node_modules/pdf-parse/package.json',
       'node_modules/.pnpm/pdf-parse@*/node_modules/pdf-parse/dist/pdf-parse/cjs/**',
       'node_modules/.pnpm/@napi-rs+canvas-linux-x64-gnu@*/node_modules/@napi-rs/canvas-linux-x64-gnu/**',
