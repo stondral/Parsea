@@ -117,7 +117,16 @@ export async function processUploadJob(payload: Payload, id: string) {
         stage = 'Already indexed · existing PDF reused', updated_at = now() WHERE id = ${id}::uuid AND lease_token = ${lease}::uuid`)
       return readUploadJob(payload, id)
     }
-    const message = error instanceof Error ? error.message : 'Indexing failed.'
+    const message =
+      error instanceof Error
+        ? error.message
+        : typeof error === 'string'
+          ? error
+          : 'Indexing failed.'
+    payload.logger.error(
+      { err: error, uploadJobId: id },
+      'PDF indexing attempt failed; checkpoints retained',
+    )
     await db.execute(sql`UPDATE document_upload_jobs SET status = 'failed', error = ${message}, stage = 'Needs attention',
       updated_at = now() WHERE id = ${id}::uuid AND status = 'running' AND lease_token = ${lease}::uuid`)
   }

@@ -123,6 +123,7 @@ export const processDocument: CollectionAfterChangeHook = async ({
       cachedPage: (page) => checkpoints.get(page),
       maxFreshPages: jobId ? 8 : undefined,
       maxOCRPages: jobId ? 3 : undefined,
+      budgetMs: jobId ? 160_000 : undefined,
       onPage: async (page) => {
         if (page.previewKey) visuals.set(page.pageNumber, page.previewKey)
         if (page.screenshot) {

@@ -5,6 +5,7 @@ import { LowConfidenceOCRError } from './ocrRecognition'
 import { PAGE_ORIENTATION_VERSION, type PageOrientation } from './pageOrientation'
 import { createPDFOrientationHints } from './pdfOrientationHints'
 import { loadPDFParser, pdfStandardFontPath } from './pdfParser'
+import { releaseResource, withResourceDeadline } from './ingestionResources'
 
 export interface ExtractedPDFPage {
   pageNumber: number
@@ -26,6 +27,7 @@ export async function extractPDF(
     cachedPage?: (page: number) => ExtractedPDFPage | undefined
     maxFreshPages?: number
     maxOCRPages?: number
+    budgetMs?: number
   } = {},
 ): Promise<ExtractedPDFPage[]> {
   if (!buffer.subarray(0, 1024).includes(Buffer.from('%PDF-')))
@@ -39,16 +41,25 @@ export async function extractPDF(
     standardFontDataUrl: pdfStandardFontPath(),
   })
   let worker: Worker | undefined
+  const started = Date.now()
   let hints: Awaited<ReturnType<typeof createPDFOrientationHints>> | undefined
   try {
-    const info = await parser.getInfo()
+    const info = await withResourceDeadline(
+      () => parser.getInfo(),
+      30_000,
+      'PDF page inspection timed out. Resume indexing to retry.',
+    )
     if (!Number.isInteger(info.total) || info.total < 1)
       throw new Error('The PDF contains no pages.')
     if (info.total > (options.maxPages || 150))
       throw new Error(
         'This PDF exceeds the page limit. Split it into smaller module PDFs before uploading.',
       )
-    const text = await parser.getText({ pageJoiner: '' })
+    const text = await withResourceDeadline(
+      () => parser.getText({ pageJoiner: '' }),
+      30_000,
+      'PDF text extraction timed out. Resume indexing to retry.',
+    )
     const byPage = new Map(text.pages.map((page) => [page.num, page.text.trim()]))
     if (text.pages.some((page) => page.text.trim().length >= 40)) {
       try {
@@ -68,6 +79,7 @@ export async function extractPDF(
         continue
       }
       await options.onProgress?.(`Reading page ${pageNumber} / ${info.total}`)
+      if (Date.now() - started > (options.budgetMs ?? Infinity)) throw new IngestionPending()
       if (freshPages >= (options.maxFreshPages ?? Infinity)) throw new IngestionPending()
       freshPages++
       let pageText = byPage.get(pageNumber) || ''
@@ -85,12 +97,17 @@ export async function extractPDF(
       }
       // Previews cover vector diagrams too, not only embedded images.
       try {
-        const shot = await parser.getScreenshot({
-          partial: [pageNumber],
-          scale: pageText.length < 40 ? 2 : 1,
-          imageBuffer: true,
-          imageDataUrl: false,
-        })
+        const shot = await withResourceDeadline(
+          () =>
+            parser.getScreenshot({
+              partial: [pageNumber],
+              scale: pageText.length < 40 ? 2 : 1,
+              imageBuffer: true,
+              imageDataUrl: false,
+            }),
+          30_000,
+          `Page ${pageNumber} rendering timed out.`,
+        )
         screenshot = shot.pages.find((page) => page.pageNumber === pageNumber)?.data
       } catch (error) {
         if (pageText.length < 40)
@@ -154,14 +171,8 @@ export async function extractPDF(
       throw new Error('Password-protected PDFs are not supported. Upload an unlocked copy.')
     throw error
   } finally {
-    try {
-      if (worker) await worker.terminate()
-    } finally {
-      try {
-        await hints?.destroy()
-      } finally {
-        await parser.destroy()
-      }
-    }
+    if (worker) await releaseResource('OCR worker', () => worker!.terminate())
+    if (hints) await releaseResource('PDF geometry', () => hints!.destroy())
+    await releaseResource('PDF parser', () => parser.destroy())
   }
 }

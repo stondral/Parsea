@@ -1,5 +1,14 @@
 # Parsea — Documentation, Architecture & AI Agent Rules
 
+## Ingestion error handling and resource collection (2026-10-17)
+
+- Server OCR workers are owned by managedOCRWorker. Each gets an isolated parsea-ocr-job-* temporary directory. Termination is idempotent and waits for the native Node thread (Tesseract's own terminate resolves early), then removes only that validated, owned directory. Local eng.traineddata is copied when present; its original is untouched. No upload, shared directory, checkpoint, published PDF or R2 object is swept by this collector.
+- Initialization has a 60-second deadline; a worker that resolves late is terminated and its directory collected. After initialization, guarded error/exit listeners reject pending recognition when the native thread crashes. Recognition keeps its existing 45-second deadline and stops further rotation attempts after expiry. A process killed externally cannot run finally; existing 15-minute lease recovery remains necessary, and a startup failure before Tesseract returns its thread handle cannot be universally force-terminated by this wrapper.
+- Parser inspection, text extraction and per-page rendering each have a 30-second asynchronous deadline; R2 uploads also abort after 30 seconds. Extraction checks a 160-second budget between fresh pages and yields through the existing IngestionPending checkpoint flow. These cooperative boundaries cannot interrupt synchronous native code or guarantee completion of every entire document within one function invocation.
+- releaseResource bounds cleanup to five seconds, warns on failure and preserves the primary error. Worker, geometry inspector and parser are all disposed independently. Initialization rejection strings are retained in failed-job messages; structured logs include the upload job ID. The existing atomic publication and lease fencing remain unchanged.
+- Browser continuation backs off running-job polling to ten seconds and stops waiting after five minutes rather than hammering a held lease indefinitely. It never clears another worker's lease; Recent uploads remains the persisted source of status and explicit retry.
+- Validation: 38 focused resource/OCR/extraction/upload/publication tests pass, including late initialization cleanup, native-thread crash rejection, stalled cleanup, no post-timeout OCR rotation and original-error preservation. Real managed OCR recognized the fixture and left no newly owned temporary directory. Isolated deployment-traced OCR and the compiled PDF resolver regression check pass; production build and TypeScript pass. No production job, cloud object or lease was modified, and no deployment was performed.
+
 ## OCR worker packaging and interrupted status (2026-10-17)
 
 - The reported stuck job was verified read-only in the configured database: status running, page 2/5, progress 21%, no update for approximately 42 minutes. No job lease or stored PDF was modified during diagnosis.

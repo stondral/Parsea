@@ -1,15 +1,18 @@
 import { createWorker, type Worker } from 'tesseract.js'
-import os from 'node:os'
+import { managedOCRWorker } from './managedOCR'
+import { releaseResource } from './ingestionResources'
 import { recognizeOCR } from './ocrRecognition'
 import type { OCRRecognition } from './ocrRecognition'
 
 export const createLocalOCRWorker = () =>
-  createWorker('eng', undefined, {
-    cachePath: process.env.VERCEL ? os.tmpdir() : process.cwd(),
-    // Tesseract otherwise throws job errors from its message event handler,
-    // outside the ingestion try/catch. Its rejected promise still reaches us.
-    errorHandler: (error) => console.error('OCR worker failed:', error),
-  })
+  managedOCRWorker((cachePath) =>
+    createWorker('eng', undefined, {
+      cachePath,
+      // Tesseract otherwise throws job errors from its message event handler,
+      // outside the ingestion try/catch. Its rejected promise still reaches us.
+      errorHandler: (error) => console.error('OCR worker failed:', error),
+    }),
+  )
 
 /**
  * Perform OCR on a scanned page image buffer.
@@ -93,7 +96,7 @@ export async function recognizeImage(
         return sharp(Buffer.from(imageBuffer)).rotate(degrees).png().toBuffer()
       })
     } finally {
-      if (!options.worker) await worker.terminate()
+      if (!options.worker) await releaseResource('OCR worker', () => worker.terminate())
     }
   } catch (tessErr) {
     if (options.worker) throw tessErr

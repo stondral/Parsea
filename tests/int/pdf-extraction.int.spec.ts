@@ -140,6 +140,14 @@ describe('Physical page extraction and OCR', () => {
     await expect(extractPDF(Buffer.from('%PDF-test'))).rejects.toThrow('Password-protected')
     expect(m.destroy).toHaveBeenCalled()
   })
+  it('preserves the original parser error when cleanup also fails', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    m.info.mockRejectedValueOnce(new Error('Primary parsing failure'))
+    m.destroy.mockRejectedValueOnce(new Error('Secondary cleanup failure'))
+    await expect(extractPDF(Buffer.from('%PDF-test'))).rejects.toThrow('Primary parsing failure')
+    expect(warning).toHaveBeenCalled()
+    warning.mockRestore()
+  })
   it('rejects oversized page counts before rendering', async () => {
     m.info.mockResolvedValueOnce({ total: 151 })
     await expect(extractPDF(Buffer.from('%PDF-test'))).rejects.toThrow('page limit')

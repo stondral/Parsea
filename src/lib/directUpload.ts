@@ -49,8 +49,20 @@ export async function finishIndexingJob<T extends { status: string; error: strin
   process: (input: { id: string }) => Promise<T>,
 ): Promise<T> {
   let result = await process({ id })
+  let waitingSince = Date.now()
+  let waitMs = 1500
   while (result.status === 'queued' || result.status === 'running') {
-    if (result.status === 'running') await new Promise((resolve) => setTimeout(resolve, 1500))
+    if (result.status === 'running') {
+      if (Date.now() - waitingSince > 300_000)
+        throw new Error(
+          'Another indexing attempt still holds this job. Check Recent uploads; interrupted jobs can be resumed after 15 minutes without re-uploading.',
+        )
+      await new Promise((resolve) => setTimeout(resolve, waitMs))
+      waitMs = Math.min(10_000, waitMs * 2)
+    } else {
+      waitingSince = Date.now()
+      waitMs = 1500
+    }
     result = await process({ id })
   }
   if (result.status !== 'ready')

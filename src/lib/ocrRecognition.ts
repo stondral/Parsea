@@ -14,6 +14,7 @@ export async function recognizeOCR(
   rotate?: (degrees: number) => Promise<OCRImage>,
 ): Promise<OCRRecognition> {
   let timeout: ReturnType<typeof setTimeout> | undefined
+  let expired = false
   try {
     const result = await Promise.race([
       (async () => {
@@ -22,7 +23,10 @@ export async function recognizeOCR(
         let rotation: PageRotation = 0
         if (rotate) {
           for (const degrees of [90, 270, 180]) {
-            const candidate = await worker.recognize(await rotate(degrees))
+            if (expired) throw new Error('OCR operation cancelled after timeout.')
+            const rotated = await rotate(degrees)
+            if (expired) throw new Error('OCR operation cancelled after timeout.')
+            const candidate = await worker.recognize(rotated)
             if (candidate.data.confidence > (best.data.confidence ?? 0)) {
               best = candidate
               rotation = degrees as PageRotation
@@ -51,10 +55,12 @@ export async function recognizeOCR(
         }
       })(),
       new Promise<never>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error('OCR timed out. Try a smaller or clearer selection.')),
-          45_000,
-        )
+        timeout = setTimeout(() => {
+          expired = true
+          reject(
+            new Error('OCR timed out after 45 seconds. Resume indexing; saved pages are retained.'),
+          )
+        }, 45_000)
       }),
     ])
     return result

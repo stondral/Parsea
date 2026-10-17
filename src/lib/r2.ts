@@ -38,7 +38,7 @@ export async function uploadToR2(params: {
     ContentType: params.contentType || 'application/pdf',
   })
 
-  await r2Client.send(command)
+  await r2Client.send(command, { abortSignal: AbortSignal.timeout(30_000) })
 
   return {
     key: params.key,

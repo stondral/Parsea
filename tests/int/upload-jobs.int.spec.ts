@@ -13,7 +13,7 @@ describe('Durable cloud upload safety', () => {
     metadata: { name: 'Logic', chapter: 'Logic', type: 'Notes', subject: 1 },
   }
   function setup() {
-    return { db: { drizzle: { execute: vi.fn() } }, create: vi.fn(), update: vi.fn() } as any
+    return { db: { drizzle: { execute: vi.fn() } }, create: vi.fn(), update: vi.fn(), logger: { error: vi.fn() } } as any
   }
   beforeEach(() => {
     vi.clearAllMocks()
